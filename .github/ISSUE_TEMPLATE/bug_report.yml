@@ -1,0 +1,45 @@
+name: Bug report / 报告问题
+description: 面板行为不符合预期 / Something isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提问前请先看 [故障排查](../../blob/main/README.md#故障排查) —— 多数
+        「卡片显示不可用」的问题在那里有答案。
+        Please check [Troubleshooting](../../blob/main/README.en.md#troubleshooting) first.
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么 / What happened
+      description: 期望的行为是什么，实际是什么 / Expected vs actual
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+    validations: {required: true}
+  - type: input
+    id: os
+    attributes:
+      label: 宿主机系统 / Host OS
+      placeholder: "cat /etc/os-release 的 PRETTY_NAME"
+    validations: {required: true}
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式 / Deployment
+      options: ["docker compose", "直接运行 python run.py / bare metal", "其他 / other"]
+    validations: {required: true}
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: "docker logs homelab-dashboard 的相关片段。请自行去除 IP、域名等敏感信息"
+      render: shell
+  - type: textarea
+    id: crowdsec
+    attributes:
+      label: CrowdSec 信息（如相关）/ CrowdSec info (if relevant)
+      description: "cscli version 与 cscli metrics 的输出"
+      render: shell

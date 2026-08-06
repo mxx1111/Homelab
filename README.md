@@ -1,315 +1,707 @@
 # Homelab Dashboard
 
-家庭基础设施总览面板。把散落在各处的状态收进一屏：安全告警、存储容量、服务健康、
-主机负载、网络速率、证书到期、端口暴露面、Docker 容器、硬盘 SMART。
+一屏看完家里那台服务器的全部状态，出事时还能直接动手。
 
-不只是看：能封禁 IP、重启容器、按趋势预测磁盘写满时间，异常时主动推送到手机。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-## 为什么不用 Grafana
+**简体中文** · [English](README.en.md)
 
-Grafana 强在时序曲线，弱在"一屏卡片式概览"，也做不了一键封 IP 这类交互。
-这个面板的目标是**打开就知道家里一切是否正常**，出事的时候还能直接动手。
+安全告警、存储容量、服务健康、主机负载、网络速率、证书到期、端口暴露面、
+实时连接、Docker 容器、硬盘 SMART —— 十二个采集器汇成一页。不只是看：
+可以一键封禁 IP、重启容器、按趋势预测磁盘写满时间，异常时主动推到手机。
+
+前端零构建、零依赖，图表是手写 SVG，整个前端就三个文件。
+
+---
+
+## 目录
+
+- [它解决什么问题](#它解决什么问题)
+- [功能](#功能)
+- [快速开始](#快速开始)
+  - [前置条件](#前置条件)
+  - [第一步：装 CrowdSec（可选但推荐）](#第一步装-crowdsec可选但推荐)
+  - [第二步：装防火墙 bouncer](#第二步装防火墙-bouncer)
+  - [第三步：告诉 CrowdSec 读哪些日志](#第三步告诉-crowdsec-读哪些日志)
+  - [第四步：部署面板](#第四步部署面板)
+  - [第五步：打开写操作](#第五步打开写操作)
+- [配置详解](#配置详解)
+- [容器权限说明](#容器权限说明)
+- [安全须知](#安全须知)
+- [功能详解](#功能详解)
+- [从本机部署到远程主机](#从本机部署到远程主机)
+- [外部看门狗](#外部看门狗)
+- [故障排查](#故障排查)
+- [架构](#架构)
+- [开发](#开发)
+- [路线图](#路线图)
+- [贡献](#贡献)
+- [许可](#许可)
+
+---
+
+## 它解决什么问题
+
+家里跑一台 NAS 或小服务器，状态散落在十几个地方：NAS 自带面板看容量、
+Portainer 看容器、CrowdSec 的 cscli 看攻击、SSH 上去 `df -h` 看磁盘、
+证书快过期了根本没人提醒。真出事的时候，你得挨个翻。
+
+这个面板把它们收进一页，并且**在发现问题的地方就能处理**——看到某个 IP
+在爆破 SSH，当场点「封禁」；看到某个容器挂了，当场重启。
+
+### 为什么不用 Grafana
+
+Grafana 强在时序曲线和多数据源，弱在「一屏卡片式概览」，也做不了一键封 IP
+这类交互——它是只读的观测台，不是操作台。如果你已经有 Prometheus 那套，
+这个面板可以和它共存：Grafana 看趋势细节，这里看「现在是否一切正常」。
+
+### 适合谁
+
+- 家里有一台常年开机的 Linux 机器（NAS、小主机、旧笔记本）
+- 装了 Docker，跑了若干服务
+- 想知道有没有人在攻击它，并且想直接反击
+
+### 不适合谁
+
+- 多机集群 —— 这是单机面板，只有一个只读的远程主机采集器
+- 需要长期高精度指标 —— 历史库是分钟级采样，Prometheus 更合适
+- 需要多用户和权限体系 —— 它没有登录，见[安全须知](#安全须知)
+
+---
+
+## 功能
+
+| 页签 | 内容 |
+|---|---|
+| **总览** | 安全态势、存储、主机负载、网络、服务健康、端口暴露、容器、硬盘、证书 |
+| **防火墙** | 封禁列表（手动/自动检出/社区黑名单三类）、攻击来源 TOP、国家与 ASN 分布、白名单、一键封禁与解封 |
+| **连接** | 此刻谁连着你，含 GeoIP 归属、连接状态中文化、按服务端口聚合 |
+| **端口** | 全部监听端口，按「公网暴露 / 内网可达 / 仅本机」分级 |
+| **历史** | 趋势曲线、事件时间线、操作审计、容量预测、采样健康 |
+| **容器** | 启停重启、日志查看、保护名单、btrfs 快照清理命令生成 |
+| **设置** | 告警规则页面化编辑、单条告警忽略、推送开关 |
+
+十二个采集器：`host` `network` `containers` `services` `crowdsec` `storage`
+`certs` `remote` `ports` `connections` `engine` `disks`。
+每个独立循环、独立失败，某一个挂掉不影响其他卡片。
+
+> **截图**：欢迎提交你的部署截图，放到 `docs/screenshots/` 并在此处引用。
+
+---
+
+## 快速开始
+
+### 前置条件
+
+**必需**
+
+- **Linux 宿主机** —— 要读 `/proc`、`/sys`、`/proc/mdstat`，macOS 与 Windows 不支持
+- **Docker** 与 **docker compose**（compose v2，即 `docker compose` 而非 `docker-compose`）
+
+**可选，但强烈推荐**
+
+- **[CrowdSec](https://www.crowdsec.net/)** —— 装了才有防火墙、封禁、攻击来源
+  那几块。不装的话面板照常运行，相关卡片显示「不可用」，其余功能不受影响
+- **smartmontools** —— 硬盘 SMART 健康监控需要 `smartctl`
+- **btrfs-progs** —— 只有用 btrfs 且想看快照才需要
+
+如果你只想先看看长什么样，跳过全部可选项，直接[第四步](#第四步部署面板)。
+
+---
+
+### 第一步：装 CrowdSec（可选但推荐）
+
+CrowdSec 是一个开源的入侵检测系统：读你的日志（nginx、sshd、smb…），
+识别出攻击行为，生成「封禁决策」。它本身不拦截，拦截由 bouncer 做。
+
+**Debian / Ubuntu**
+
+```bash
+curl -s https://install.crowdsec.net | sudo sh
+sudo apt install crowdsec
+```
+
+**RHEL / CentOS / Fedora / Rocky**
+
+```bash
+curl -s https://install.crowdsec.net | sudo sh
+sudo dnf install crowdsec
+```
+
+**Alpine**
+
+```bash
+sudo apk add crowdsec
+```
+
+**其他**：见[官方安装文档](https://docs.crowdsec.net/docs/getting_started/install_crowdsec/)。
+
+装完确认服务起来了：
+
+```bash
+sudo systemctl status crowdsec
+sudo cscli metrics          # 看到解析统计就说明在跑
+```
+
+CrowdSec 会自动检测机器上有哪些服务，装上对应的规则集（collection）。
+看一眼装了什么：
+
+```bash
+sudo cscli collections list
+```
+
+典型输出会包含 `crowdsecurity/nginx`、`crowdsecurity/sshd`、
+`crowdsecurity/linux` 等。缺什么可以手动装：
+
+```bash
+sudo cscli collections install crowdsecurity/nginx
+sudo systemctl reload crowdsec
+```
+
+---
+
+### 第二步：装防火墙 bouncer
+
+**这一步不能省。** CrowdSec 只负责「判断谁该封」，真正把 IP 挡在门外的是
+bouncer。没有它，面板上点「封禁」会成功写入决策，但流量照进不误。
+
+```bash
+# Debian / Ubuntu（iptables）
+sudo apt install crowdsec-firewall-bouncer-iptables
+
+# 如果你的系统用 nftables
+sudo apt install crowdsec-firewall-bouncer-nftables
+
+# RHEL 系
+sudo dnf install crowdsec-firewall-bouncer-iptables
+```
+
+验证它注册上了：
+
+```bash
+sudo cscli bouncers list
+```
+
+应当看到一个 `cs-firewall-bouncer-xxxxx`，`Valid` 列是勾。
+
+**封禁生效有延迟。** bouncer 默认每 10 秒向 LAPI 拉一次决策，所以在面板上
+点封禁到 iptables 真正拦截，中间有大约 10 秒。这是正常的，不是面板卡住了。
+
+---
+
+### 第三步：告诉 CrowdSec 读哪些日志
+
+CrowdSec 靠读日志发现攻击，读不到日志就什么都检测不出来。
+配置文件在 `/etc/crowdsec/acquis.yaml` 或 `/etc/crowdsec/acquis.d/*.yaml`。
+
+安装时自动生成的配置通常够用，但**如果你的服务跑在 Docker 里，日志路径
+往往不在默认位置**，需要手动补。例如 nginx 容器把日志挂到了宿主机：
+
+```yaml
+# /etc/crowdsec/acquis.d/my-nginx.yaml
+filenames:
+  - /var/log/nginx/*.log
+  - /opt/nginx/logs/access.log      # 你自己的路径
+labels:
+  type: nginx
+```
+
+改完重载并检查：
+
+```bash
+sudo systemctl reload crowdsec
+sudo cscli metrics
+```
+
+**重点看「Acquisition Metrics」那张表的解析率。** 如果某个日志源
+`Lines parsed` 是 0 而 `Lines unparsed` 很大，说明 `type` 标错了或者
+缺少对应的 parser——这个源等于白读，白白消耗 CPU。面板的「防护引擎」卡片
+会把这种零产出的源单独标出来。
+
+> 解析率必须**按源分别看**。把所有源混在一起算全局解析率是没有意义的：
+> syslog 里绝大多数行本来就没有对应解析器，混进去会把真正健康的 nginx
+> 源的数字拖到个位数，让你误以为整个系统坏了。
+
+---
+
+### 第四步：部署面板
+
+```bash
+git clone https://github.com/mxx1111/Homelab.git
+cd Homelab
+cp config.example.yaml config.yaml
+```
+
+打开 `config.yaml`，**至少改这几处**：
+
+```yaml
+site_name: 我的NAS            # 推送标题的前缀，多台机器时用来区分
+
+storage:
+  volumes:
+    - label: 系统盘
+      path: /hostfs           # 容器里宿主机根分区挂在这
+      warn: 80
+      crit: 90
+    - label: 数据盘            # 按自己的挂载点加
+      path: /hostfs/mnt/data
+      warn: 80
+      crit: 90
+
+services:                     # 想监控的服务，探针在本机发起
+  - name: 我的博客
+    url: http://127.0.0.1:8080/
+    expect: [200, 302]
+
+certs:
+  targets:                    # 检查到期的域名，没有就留空列表
+    - host: example.com
+      port: 443
+```
+
+然后启动：
+
+```bash
+docker compose up -d --build
+```
+
+打开 `http://<你的服务器地址>:8770`。
+
+**首次启动后看一眼日志**，确认各采集器状态：
+
+```bash
+docker logs -f homelab-dashboard
+```
+
+---
+
+### 第五步：打开写操作
+
+面板出厂状态下**所有写操作都是拒绝的**——封禁、解封、重启容器、改告警规则
+全部返回 403。因为它能改防火墙、能操作容器，自己却没有登录体系。
+
+打开的方式二选一：
+
+**方式 A：设置操作令牌（推荐）**
+
+```yaml
+# config.yaml
+firewall:
+  write_token: "换成一串随机字符"
+```
+
+生成一串：
+
+```bash
+openssl rand -hex 24
+```
+
+前端会多出一个令牌输入框，填一次会记在浏览器 localStorage 里。
+
+**方式 B：完全信任所在网络**
+
+```yaml
+firewall:
+  allow_anonymous_write: true
+```
+
+只有当面板确实只能从内网或 VPN 访问时才这么做。
+
+改完重启容器：
+
+```bash
+docker compose restart
+```
+
+---
+
+## 配置详解
+
+配置文件是 `config.yaml`，从 `config.example.yaml` 复制而来。
+查找顺序：环境变量 `HOMELAB_CONFIG` → `/etc/homelab-dashboard/config.yaml`
+→ 仓库根目录的 `config.yaml` → `config.example.yaml`（兜底，让新克隆的仓库能起来）。
+
+| 配置段 | 说明 |
+|---|---|
+| `site_name` | 推送标题前缀，也显示在页面头部 |
+| `server` | 监听地址与端口，默认 `0.0.0.0:8770` |
+| `intervals` | 各采集器的执行间隔（秒）。慢操作放大间隔，避免拖慢面板 |
+| `storage.volumes` | 监控的卷及告警阈值。**容器里宿主机根分区在 `/hostfs`** |
+| `storage.snapshot_mounts` | btrfs 快照扫描的挂载点，非 btrfs 留空 |
+| `services` | 健康探针，`expect` 是可接受的 HTTP 状态码列表 |
+| `certs.targets` | 检查到期的域名与端口 |
+| `network.interface` | 留空自动选流量最大的物理网卡 |
+| `crowdsec` | LAPI 地址、数据库路径、凭据文件 |
+| `firewall` | 写操作开关与令牌，见[第五步](#第五步打开写操作) |
+| `history` | SQLite 历史库路径与保留天数 |
+| `notify` | Server 酱推送，SendKey 走环境变量不写这里 |
+| `alerts.rules` | 各类告警的阈值与开关，**也可以在面板「设置」页改** |
+| `ports` | 端口标签、公网端口声明、放行脚本路径 |
+| `disks.warn_hours` | 硬盘通电时长告警阈值，默认 35000 小时（约 4 年） |
+| `actions` | 容器操作开关与保护名单 |
+| `remote_hosts` | SSH 采集的远程主机 |
+
+### 关于采集间隔
+
+默认值是权衡过的，两个特别说明：
+
+- `disks: 1800` —— SMART 查询**会唤醒休眠的机械盘**。间隔太短会让盘永远
+  睡不着，既费电又折寿。
+- `storage: 300` —— btrfs 快照扫描要遍历子卷，在快照多的机器上要几秒。
+
+### 告警规则
+
+`alerts.rules` 里的阈值是默认值。在面板「设置」页改的值存在 SQLite 里，
+按字段深合并覆盖配置文件——所以你改一个阈值不会把其他字段重置掉，
+也不用重启容器。想恢复默认，设置页有「恢复默认」按钮。
+
+告警不会一有异常就推送：`sustain_seconds`（默认 120 秒）要求异常持续
+存在这么久才算数，用来压掉探针偶发超时造成的误报。
+
+---
+
+## 容器权限说明
+
+面板要读宿主机的数据，靠挂载和两个 capability 实现，**不需要 privileged**。
+部署前请逐条看一遍，用不到的功能把对应挂载删掉即可，面板会自动降级。
+
+| 挂载 / 权限 | 用途 | 不给会怎样 |
+|---|---|---|
+| `network_mode: host` | 读 `/proc/net/*` 拿网卡速率、监听端口、实时连接 | 网络、端口、连接三块失效 |
+| `/:/hostfs:ro` | 宿主机根分区容量 | 存储卡片读到的是容器自己的 overlay 层 |
+| `/var/run/docker.sock:ro` | 容器列表与资源占用 | 容器页空白 |
+| `/usr/bin/docker:ro` | 直接用宿主机的 docker CLI，省掉镜像里再装一份 | 同上 |
+| `/var/lib/crowdsec/data:ro` | 读告警明细（SQLite） | 攻击来源、告警统计失效 |
+| `/etc/crowdsec/local_api_credentials.yaml:ro` | 封禁/解封要写 LAPI | 只能看不能封 |
+| `cap_add: SYS_ADMIN` | btrfs 的 `subvolume list` ioctl | 快照功能失效 |
+| `cap_add: SYS_RAWIO` + `/dev:ro` + `device_cgroup_rules` | `smartctl` 读硬盘 SMART | 硬盘健康卡片显示不可用 |
+| `/sys/class/thermal:ro` | CPU 温度 | 温度显示为空 |
+| `./data:/app/data` | **唯一的可写挂载**，历史库落在这 | 重启后历史丢失 |
+
+本机专属的挂载建议写进 `docker-compose.override.yml`（compose 会自动合并，
+且已在 `.gitignore` 里），这样升级时不必每次改主文件：
+
+```yaml
+# docker-compose.override.yml
+services:
+  dashboard:
+    volumes:
+      - /mnt/data:/mnt/data:ro
+```
+
+### 为什么面板能封禁 IP
+
+面板复用 CrowdSec agent 自己的 machine 凭据
+（`/etc/crowdsec/local_api_credentials.yaml`，只读挂载）登录 LAPI，
+拿到 JWT 后调用 `/v1/decisions` 写入决策。
+
+**为什么不直接改 SQLite**：直接写数据库不会通知 bouncer，规则永远下不到
+iptables。所有写操作必须走 LAPI。
+
+---
+
+## 安全须知
+
+**这个面板没有登录体系。** 它把整台机器的状态聚合在一页——服务清单、端口
+暴露面、容器列表、内网拓扑——对攻击者而言这是最理想的情报源。加上它还能
+改防火墙和操作容器，一旦暴露到公网就是灾难。
+
+设计上的取舍：
+
+1. **写操作默认拒绝。** 未配置 `write_token` 时，所有写接口返回 403。
+   要么配令牌，要么显式声明 `allow_anonymous_write: true`。
+2. **受保护网段不可封禁。** 内网段（`10/8`、`172.16/12`、`192.168/16`）、
+   回环、Tailscale CGNAT 段（`100.64/10`）在代码里硬保护，防止手滑把自己
+   关在门外。可在 `crowdsec.protected_networks` 追加。
+3. **快照只生成命令不执行删除。** 卷是只读挂载，面板给你一条命令，
+   自己复制到宿主机执行。在没有认证的前提下，给它删数据的权限不划算。
+4. **审计只记写操作。** 面板每 5 秒轮询一次，GET 全记下来一天几万条，
+   有用的写操作反而被埋掉。首页访问按 IP 每小时记一条。
+
+**推荐的部署方式**
+
+- 只监听内网，用防火墙限制来源网段
+- 需要外网访问就走 Tailscale / WireGuard / Zerotier，**不要做端口映射**
+- 真要放公网，前面加一层带认证的反向代理（Authelia、Cloudflare Access 等），
+  别只靠 `write_token`
+
+**发现漏洞**请见 [SECURITY.md](SECURITY.md)。
+
+---
+
+## 功能详解
+
+### 防火墙
+
+封禁列表分三类，因为它们的处理方式完全不同：
+
+- **手动** —— 你自己封的，可以随时解
+- **自动检出** —— CrowdSec 的场景规则命中的，可以解
+- **社区黑名单** —— CrowdSec 中央情报，通常上万条。**解了会在下次同步时
+  回来**，因为它不是本机的决策
+
+社区黑名单动辄一两万条，全量下发会撑爆前端。策略是：前两类全量返回，
+社区黑名单只取最近一批供浏览，**总数用 SQL COUNT 单独统计**，所以你看到的
+数字是准的，只是列表不全。搜索直接查库，不受此限制。
+
+### 白名单
+
+CrowdSec 原生的 whitelist 是 parser 层的 YAML 配置，改完要 reload 服务——
+面板跑在容器里，既没有配置目录的写权限，也不该去重启宿主机的 systemd 服务。
+
+所以这里用的是「看门」式实现：每轮采集后比对封禁列表，白名单里的 IP
+一出现就立刻调 LAPI 解封。代价是有一个采集周期的延迟，好处是不碰
+CrowdSec 的任何配置文件。
+
+### 告警与推送
+
+走 [Server 酱](https://sct.ftqq.com/)。SendKey **不要写进 config.yaml**，
+放 `.env`：
+
+```bash
+cp .env.example .env
+echo "HOMELAB_SENDKEY=你的SendKey" >> .env
+docker compose up -d
+```
+
+`sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。
+
+告警有三层防刷屏：`sustain_seconds` 持续时间门槛、`repeat_hours` 重复提醒
+间隔、以及单条告警的「忽略」（可设时长或永久，在设置页管理）。
+问题消失时会补一条恢复通知。
+
+### 端口暴露审计
+
+把所有监听端口按可达范围分三级：
+
+- **公网暴露** —— 在 `ports.public_ports` 里声明过的，标红
+- **内网可达** —— 绑定在 `0.0.0.0` 但未对外映射
+- **仅本机** —— 绑定在 `127.0.0.1`
+
+如果你用一个 iptables 脚本管理放行端口，且脚本里有形如 `PORTS="22,80,443"`
+的一行，把路径填进 `ports.homeguard_path`，分级会更准确。留空则跳过。
+
+**`public_ports` 必须手填**——路由器上做了哪些端口映射，只有你自己知道，
+系统层面看不出来。
+
+### 历史与趋势
+
+分钟级采样落 SQLite，默认保留 90 天。图表按单位合并：CPU 与内存一张、
+上下行流量一张、各存储卷一张——共用纵轴才比得出比例。
+
+纵轴贴合数据范围，但有**最小跨度**保护：存储曲线常年在 40% 附近纹丝不动，
+纯按数据缩放会把 0.1% 的抖动撑满整张图，看着像盘要炸了。
+
+容量预测用线性外推，但**观测窗口不足 24 小时不给结论**。启动阶段的波动
+外推出来会是个吓人的假数字，宁可显示「数据不足」。
+
+### 硬盘健康
+
+重映射扇区、待处理扇区非零立刻标红——这两个是「当前状态」，非零就是真问题。
+
+`Reported_Uncorrect` 特殊处理：它是**历史累计次数**，只增不减。光看数值
+分不清那几次错误是昨天发生的还是六年前。面板会去读 SMART 错误日志里的
+power-on 时间戳，和当前通电时长一比，超过一年没有新增就判为陈年旧账，
+从告警里摘出来单独说明。
+
+还会检查 `/proc/mdstat`：不少 NAS 会把单块盘也包装成 raid1，看着像有冗余，
+实际是 `[1/1]` 单成员。这种「名义冗余」会被单独点出来。
+
+---
+
+## 从本机部署到远程主机
+
+`deploy.sh` 把代码打包上传、在远端构建镜像、重启容器。
+
+```bash
+cp deploy.env.example .deploy.env
+# 编辑 .deploy.env，填 HOMELAB_HOST（ssh 别名或 user@host）
+./deploy.sh              # 构建并部署
+./deploy.sh --config     # 顺带用本地 config.yaml 覆盖远端的
+./deploy.sh --no-build   # 只重启容器，不重建镜像
+```
+
+两个坑：
+
+- **`--no-build` 不会更新代码。** `backend/` 和 `frontend/` 是 COPY 进镜像的，
+  只有 `config.yaml` 是挂载的。改了代码必须重建镜像。
+- **新增配置项时必须带 `--config`**，否则远端读不到新的配置段。
+  旧配置会自动备份为 `config.yaml.bak`。
+
+默认不覆盖远端 `config.yaml`，避免冲掉你在服务器上的临时调整。
+
+---
+
+## 外部看门狗
+
+告警引擎跑在被监控的机器上，**那台机器一挂，告警也跟着哑火**——最该报警的
+时候反而没有声音。
+
+`scripts/watchdog.sh` 补上这个盲区。它必须部署在**被监控机器之外**的一台
+常年在线的机器上（一台便宜的云服务器就够）：
+
+```bash
+mkdir -p /opt/homelab-watchdog && cd /opt/homelab-watchdog
+# 上传 watchdog.sh 和 watchdog.env.example
+chmod +x watchdog.sh
+cp watchdog.env.example watchdog.env && vi watchdog.env   # 填 SENDKEY 和 TARGETS
+./watchdog.sh --test                                      # 验证推送通不通
+( crontab -l 2>/dev/null; echo "*/5 * * * * /opt/homelab-watchdog/watchdog.sh" ) | crontab -
+```
+
+建议探公网入口而不是内网 IP——它同时验证了机器活着、网络通、反向代理正常。
+连续 3 次失败（约 15 分钟）才报，滤掉重启和网络抖动。
+
+---
+
+## 故障排查
+
+**面板起来了，但很多卡片显示「不可用」**
+
+正常。没装 CrowdSec 就没有防火墙数据，没装 smartctl 就没有硬盘数据。
+`docker logs homelab-dashboard` 会说明每个采集器失败的原因。
+
+**存储容量显示的数字不对**
+
+容器里的 `/` 是自己的 overlay 层，不是宿主机根分区。`config.yaml` 里
+路径要写 `/hostfs`，不能写 `/`。
+
+**点封禁提示 403**
+
+写操作默认锁定，见[第五步](#第五步打开写操作)。
+
+**点封禁成功了，但对方还能访问**
+
+1. 检查 bouncer 装了没：`sudo cscli bouncers list`
+2. 等 10 秒——bouncer 轮询周期
+3. 检查 iptables：`sudo iptables -L CROWDSEC_CHAIN -n | head`
+4. 确认封的不是受保护网段（内网、回环、Tailscale 段会被拒绝）
+
+**攻击来源一直是空的**
+
+CrowdSec 没检测到东西，通常是日志源没配对。跑 `sudo cscli metrics` 看
+「Acquisition Metrics」，如果某个源的 `Lines parsed` 是 0，说明 `type`
+标错或缺 parser。见[第三步](#第三步告诉-crowdsec-读哪些日志)。
+
+**硬盘卡片显示「读不到磁盘列表」**
+
+需要 `SYS_RAWIO` + `/dev` 挂载 + `device_cgroup_rules`，且宿主机装了
+`smartmontools`。注意**挂了 `/dev` 不等于有权限访问块设备**，
+`device_cgroup_rules` 那两行不能少。
+
+**容器时间和宿主机差 8 小时**
+
+挂上 `/etc/localtime:/etc/localtime:ro`（默认 compose 里已有）。
+
+**历史页显示「数据不足」**
+
+采样窗口不够。容量预测需要至少 24 小时数据，趋势图需要至少 2 个采样点。
+
+---
 
 ## 架构
 
 ```
-采集器(9 个，各自独立循环) ─┬─ 内存缓存 ─→ FastAPI ─→ 前端(5 秒轮询)
-                            ├─ SQLite   历史指标与事件，保留 90 天
-                            └─ 告警引擎 ─→ Server 酱 ─→ 手机
+采集器(12 个，各自独立循环) ─┬─ 内存缓存 ─→ FastAPI ─→ 前端(5 秒轮询)
+                             ├─ SQLite   历史指标与事件，保留 90 天
+                             └─ 告警引擎 ─→ Server 酱 ─→ 手机
 ```
 
-关键设计：**采集与请求解耦**。慢采集（btrfs 扫快照要几秒、SSH 到远程主机要 1 秒）
-在后台按自己的节奏跑，前端只读缓存，永远不等待。某个采集器失败时保留上一次的
+**采集与请求解耦。** 慢采集（btrfs 扫快照几秒、SSH 到远程主机 1 秒）在后台
+按自己的节奏跑，前端只读缓存，永远不等待。某个采集器失败时保留上一次的
 成功数据，不会让整块卡片变空。
 
-落历史和评估告警走单独一条循环（30 秒一轮），不跟着采集器节奏；两者都是阻塞操作
-（SQLite 写、推送 HTTP），丢到线程池执行，不会卡住事件循环。
+落历史和评估告警走单独一条循环（30 秒一轮），不跟着采集器节奏；两者都是
+阻塞操作（SQLite 写、推送 HTTP），丢到线程池执行，不卡事件循环。
 
-## 数据来源
+### 目录结构
 
-| 采集器 | 来源 | 默认间隔 |
-|---|---|---|
-| host | /proc/stat、/proc/meminfo、/sys/class/thermal | 10s |
-| network | /proc/net/dev 差值采样 | 5s |
-| containers | docker ps / docker stats | 15s |
-| services | HTTP 探针（并发） | 60s |
-| crowdsec | cscli alerts / decisions | 30s |
-| storage | statvfs + btrfs subvolume list | 300s |
-| certs | openssl s_client | 3600s |
-| remote | SSH 一次取回 load/mem/npu-smi | 60s |
-| ports | /proc/net/{tcp,udp} + docker ps + 放行脚本(可选) | 120s |
-
-## 快速开始
-
-**前置条件**
-
-- Linux 宿主机（要读 `/proc`、`/sys`、`mdstat`，不支持 macOS/Windows）
-- Docker 与 docker compose
-- 可选：[CrowdSec](https://www.crowdsec.net/) — 装了才有防火墙、封禁、攻击来源
-  那几块；没装的话面板照常跑，相关卡片显示不可用
-- 可选：`smartctl` — 硬盘 SMART 监控需要，宿主机装 `smartmontools` 即可
-
-**在宿主机上直接起**
-
-```bash
-git clone <仓库地址> && cd homelab-dashboard
-cp config.example.yaml config.yaml    # 按自己的环境改：卷、服务、域名
-docker compose up -d --build
+```
+backend/
+  main.py            FastAPI 路由与审计中间件
+  cache.py           采集调度与内存缓存
+  config.py          配置加载
+  alerts.py          告警规则引擎、覆盖层、静音
+  firewall.py        LAPI 客户端与白名单
+  history.py         SQLite：metrics/events/whitelist/audit/settings
+  notify.py          Server 酱
+  actions.py         容器操作与快照
+  asn_names.py       ISP 名称本地化
+  collectors/        12 个采集器
+frontend/
+  index.html         页面骨架
+  app.css            样式
+  app.js             渲染与交互（零依赖）
+scripts/
+  watchdog.sh        外部看门狗
 ```
 
-打开 `http://<主机地址>:8770`。
+### API
 
-`docker-compose.yml` 里挂载了不少宿主机路径（Docker socket、CrowdSec 数据库、
-`/dev`、根分区只读），并加了 `SYS_ADMIN` / `SYS_RAWIO` 两个 capability。
-**部署前请逐条看一遍**，用不到的功能把对应挂载删掉即可，面板会自动降级。
+全部在 `/api/docs`（FastAPI 自动生成）。主要端点：
 
-**写操作默认是锁死的。** 面板能封 IP、能重启容器，却没有登录体系，所以未配置
-`firewall.write_token` 时写接口一律返回 403。要用这些功能，在 `config.yaml` 里
-填一串随机字符（前端会多出令牌输入框），或者在确认它只暴露于可信内网时设
-`allow_anonymous_write: true`。
-
-## 从本机部署到远程主机
-
-`deploy.sh` 把代码打包上传、在远端构建镜像并重启容器。
-
-```bash
-cp deploy.env.example .deploy.env    # 填 HOMELAB_HOST，可选填 SUDO_PASS
-./deploy.sh              # 构建并部署
-./deploy.sh --config     # 顺带用仓库里的 config.yaml 覆盖线上的
-./deploy.sh --no-build   # 只重启容器，不重建镜像
+```
+GET  /api/summary                 一次拿到所有采集器数据
+GET  /api/section/{name}          单个采集器
+GET  /api/history/multi           多条曲线
+POST /api/firewall/ban            封禁
+POST /api/firewall/unban          解封
+POST /api/containers/{name}/{action}   容器操作
+PUT  /api/alerts/settings         改告警规则
 ```
 
-**新增配置项时必须带 `--config`**，否则线上读不到新的配置段。旧配置会自动备份为
-`config.yaml.bak`。
+写操作需要 `X-Panel-Token` 头（配了 `write_token` 时）。
 
-**`--no-build` 不会更新代码。**`backend/` 和 `frontend/` 是 COPY 进镜像的，
-只有 `config.yaml` 是挂载的。改了代码就必须重建镜像（有层缓存，通常十几秒）。
-这个参数只在"仅改了 config.yaml，想让容器重新读配置"时有用。
+---
 
-部署后：`http://<主机地址>:8770`
+## 开发
 
-`config.yaml` 在服务器上的改动**不会被部署覆盖**，可直接在线上调整服务列表和阈值。
-
-### 容器如何拿到宿主机数据
-
-采集器要读的东西大多在宿主机上，靠挂载和一个 capability 解决，**不需要 privileged**：
-
-| 需求 | 方案 |
-|---|---|
-| `docker ps/stats` | 挂 `/var/run/docker.sock` + 挂宿主机的 `/usr/bin/docker` |
-| `btrfs subvolume list` | `cap_add: SYS_ADMIN`（ioctl 需要），挂各存储卷只读 |
-| CrowdSec 告警明细 | 挂 `/var/lib/crowdsec/data` 只读，SQLite 直读 |
-| `/proc` 网卡与负载 | `network_mode: host` |
-| CPU 温度 | 挂 `/sys/class/thermal` 只读 |
-| SSH 采集远程主机 | 挂对应的私钥文件只读 |
-| 封禁 / 解封 | 挂 `/etc/crowdsec/local_api_credentials.yaml` 只读，走 LAPI |
-| 端口审计 | `network_mode: host` 下 `/proc/net/tcp` 就是宿主机网络栈 |
-| 历史库 | 挂 `./data:/app/data`，唯一的可写挂载 |
-
-两个刻意的设计：
-
-**docker CLI 不装进镜像**，从宿主机挂载。它虽然不是静态链接，但宿主机与
-`python:3.11-slim` 同为 Debian 12，libc 版本一致可直接运行，省掉构建时 50MB 下载。
-
-**CrowdSec 改走 SQLite 而非 `cscli`**。容器里不必安装 cscli，且直读数据库比
-fork 一个 cscli 进程快 50 倍（9ms vs 463ms）。代码保留了三层回退
-（LAPI → SQLite → cscli），裸机跑也能工作。
-
-### 构建踩过的坑
-
-第一次构建在 `apt-get` 那层**跑了 757 秒然后超时失败**。原因是宿主机配了中科大源，
-但容器是干净的 `python:3.11-slim`，用的还是 `deb.debian.org` 官方源。
-Dockerfile 里换成 `mirrors.ustc.edu.cn` 后，整个构建降到 1 分钟内，镜像 188MB。
-
-教训：**容器是全新系统，宿主机的镜像源配置一点都带不进去**，apt 和 pip 都要单独换。
-
-## 配置
-
-从 `config.example.yaml` 复制一份改。改完重启容器生效。
-
-- `services` — 要探测的服务，`expect` 是可接受的 HTTP 状态码
-- `storage.volumes` — 监控的卷及告警阈值
-- `certs.targets` — 检查到期的域名
-- `remote_hosts` — SSH 采集的远程主机，需先配好免密
-
-## 访问方式
-
-面板会显示全部基础设施状态，**这是攻击者最想要的情报**，因此不暴露公网：
-
-- 内网直接访问
-- 外出时走 Tailscale
-
-建议用防火墙把面板端口限制在内网 + VPN 网段。
-
-## 防火墙操作
-
-面板的「防火墙」页可以直接封禁 / 解封 IP，底层是 CrowdSec。
-
-**生效链路**：点击按钮 → `POST /v1/alerts` 写入 LAPI → firewall-bouncer 轮询
-（约 10 秒）→ 落到 iptables 的 `INPUT` 与 `DOCKER-USER` 两条链。所以按下去到
-真正拦截有十几秒延迟，不是没生效。
-
-**读写分离**：查询走 SQLite 只读，写必须走 LAPI——直接改库不会通知 bouncer，
-规则永远下不到 iptables。写操作复用 crowdsec agent 自己的 machine 凭据
-（compose 里只读挂载 `local_api_credentials.yaml`），宿主机上不装任何东西，
-密钥也不进版本库。
-
-**封禁来源分三类**，列表里有标签区分：
-
-| 来源 | 含义 | 能否解封 |
-|---|---|---|
-| 手动 | 面板或 cscli 封的 | 能 |
-| 自动 | 本地场景检出的（爆破、扫描） | 能 |
-| 社区 | CrowdSec 中心同步的黑名单 | 不能，解了会被同步回来 |
-
-**防自锁**：内网段（`192.168/16`、`10/8`、`172.16/12`）、回环、Tailscale
-CGNAT 段（`100.64/10`）在代码里硬保护，请求会被拒绝并说明原因。要额外保护别的
-网段，加到 `crowdsec.protected_networks`。
-
-**访问控制**：面板本身没有登录，任何能打开它的人都能改防火墙。当前只走内网和
-Tailscale 所以可以接受。若要放宽访问范围，在 `firewall.write_token` 填一串随机
-字符，前端会多出令牌输入框（存 localStorage）；或直接 `firewall.enabled: false`
-退回只读。
-
-## 告警与推送
-
-异常时主动推 Server 酱，不用你盯着面板。
-
-**规则**：磁盘超阈值、服务掉线、证书临期、CPU/内存/温度持续高位、采集器失败、
-新增封禁。阈值都在 `config.yaml` 的 `alerts.rules` 里。
-
-**抖动抑制**：异常必须连续存在 `sustain_seconds`（默认 120 秒）才真正推送，
-压掉探针偶发超时造成的误报。问题没解决时每 `repeat_hours`（默认 12 小时）
-提醒一次，恢复了补一条恢复通知。
-
-**新封禁只报本地检出和手动的**，社区黑名单每次同步几百条，报了就是刷屏。
-
-配置：在 `notify` 段填 Server 酱的 SendKey 并把 `enabled` 改成 true。
-`sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。填完可以调
-`POST /api/alerts/test` 发一条测试。
-
-### 外部看门狗（重要）
-
-告警引擎跑在被监控的机器上，**它一挂告警也跟着哑火**——最该报警的时候没有声音。
-所以 `scripts/watchdog.sh` 必须部署在它之外的一台常年在线的机器上
-（任何一台常年在线的机器都行）：
+不用 Docker 直接跑：
 
 ```bash
-mkdir -p /opt/homelab-watchdog && cd /opt/homelab-watchdog
-# 上传 scripts/ 下的两个文件后：
-chmod +x watchdog.sh
-cp watchdog.env.example watchdog.env && vi watchdog.env    # 填 SENDKEY
-./watchdog.sh --test                                        # 验证探测与推送
-( crontab -l 2>/dev/null; echo "*/5 * * * * /opt/homelab-watchdog/watchdog.sh" ) | crontab -
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp config.example.yaml config.yaml
+python run.py
 ```
 
-建议探公网入口，它同时验证了机器活着、网络通、
-lucky 正常。连续 3 次失败（约 15 分钟）才报，滤掉重启和网络抖动。
+前端零构建，改完 `frontend/` 下的文件刷新浏览器即可。
 
-## 端口暴露审计
-
-「端口」页列出所有监听端口，按可达范围分三级。分级不靠猜，靠三个客观事实：
-
-| 级别 | 判定依据 |
-|---|---|
-| 仅本机 | 绑定地址全是 `127.0.0.1`/`::1` |
-| 公网暴露 | 在 `ports.public_ports` 里声明过 |
-
-`ports.public_ports` 需要手填——lucky 的公网映射有哪些，只有你知道。
-
-## 容器操作与快照
-
-「容器」页可以重启、启停、看最近 300 行日志。重启是两段式确认。
-
-**保护名单**：`homelab-dashboard` 和 `crowdsec` 不允许从面板停止或重启——
-前者停了就再也点不动按钮，后者停了防护直接掀掉。注意 `docker.sock` 挂成
-`:ro` 只限制 socket 文件本身的权限，通过它照样能执行任何 docker 动作，
-所以保护必须在代码里做，不能指望挂载选项。
-
-**快照只读**：列出各卷快照、标出超过保留数的，但**不执行删除**，只生成命令让你
-复制到宿主机上执行。卷是只读挂载，而面板没有登录体系，给它删快照的权限风险大于收益。
-
-## 历史与趋势
-
-指标每分钟采样落 SQLite，保留 90 天。「历史」页有 CPU、内存、上下行、各卷使用率、
-负载、封禁数的曲线，可切 6 小时 / 24 小时 / 7 天 / 30 天。
-
-**容量预测**按最近 7 天的增长速度线性外推，给出"约 X 天写满"。存储卡片上也会
-直接显示，30 天内写满的标黄。
-
-事件时间线记录所有告警、封禁、容器操作，重启不丢。
-
-## 操作审计
-
-面板没有登录体系，「历史」页底部的操作审计是唯一能看出**谁动过防火墙**的地方。
-
-记录范围：所有写操作（封禁、解封、白名单增删、容器启停），**包括被拒绝的**——
-token 不对、封到受保护网段、想停保护名单里的容器，这些失败尝试同样落库。
-另外每个来源 IP 每小时记一条"打开面板"。
-
-**GET 不记**：面板每 5 秒轮询一次 `/api/summary`，全记下来一天几万条，
-真正有用的写操作反而被埋掉。
-
-来源 IP 优先取 `X-Forwarded-For` 第一跳，面板将来放到反代后面也能记到真实地址。
-
-## 防护引擎
-
-「防火墙」页的引擎卡片回答的是"CrowdSec 本身在不在干活"——读了哪些日志、
-解析率多少、哪些检测场景被触发。日志源突然归零往往意味着日志轮转后没跟上，
-这种故障不看这一页根本发现不了。
-
-**解析率必须按源单独算。**全局算出来是 1.7%，看着像整个引擎坏了，实际是
-syslog 那几万行系统日志本来就没有对应解析器；真正要盯的 nginx 是 100%。
-混在一起这个指标就废了。面板另给一个"有效源加权解析率"，只统计至少解析出过
-一条的源。
-
-上线首轮就查出 6 个日志源里 4 个解析率为 0，配了采集却没有产出。已清理，
-详见 `docs/家庭三台设备定位与利用规划.md`。
-
-## 常用命令
-
-```bash
-ssh <主机> "sudo docker ps --filter name=homelab-dashboard"
-ssh <主机> "sudo docker logs -f homelab-dashboard"
-ssh <主机> "sudo docker restart homelab-dashboard"        # 改完 config.yaml 后
-curl -s http://<主机地址>:8770/api/summary | python3 -m json.tool
-curl -s http://<主机地址>:8770/api/section/storage
-```
+注意直接跑的时候，容器里的路径假设（`/hostfs`）不成立，
+`storage.volumes` 里要改成真实路径。
 
 ---
 
 ## 路线图
 
-已完成：历史数据落 SQLite（90 天）、存储增长预测、网络与负载曲线、攻击来源
-聚合与一键封禁、容器重启与日志、Server 酱告警推送、外部看门狗、端口暴露审计、
-访问审计、告警规则页面化编辑、硬盘 SMART 监控。
+已完成：历史数据落 SQLite、存储增长预测、网络与负载曲线、攻击来源聚合与
+一键封禁、容器重启与日志、Server 酱告警推送、外部看门狗、端口暴露审计、
+访问审计、告警规则页面化、硬盘 SMART 监控、ISP 名称本地化。
 
 还没做：
 
-- 容器资源排行的详情页 — 点开看单个容器的历史占用
-- 快照真删除 — 现在只生成命令，要做得先给面板加认证
-- 手机端布局再打磨 — 目前能用，表格横向滚动略挤
-- `app.js` 已近 1600 行，再加功能需要按页面拆模块
+- 容器资源排行的详情页 —— 点开看单个容器的历史占用
+- 快照真删除 —— 现在只生成命令，要做得先给面板加认证
+- 多语言界面 —— 目前界面是中文，欢迎 PR
+- 手机端布局再打磨 —— 目前能用，表格横向滚动略挤
 
-## 已知技术债
+---
 
-- [ ] `certs` 采集器依赖 `openssl` 命令行，没有做无 openssl 环境的降级
-- [ ] `containers` 采集器对旧版 Docker 的 `.State` 字段做了兼容回退，
-      但未在旧版上实测
-- [x] **前端单文件过长** — 已拆成 `index.html` / `app.css` / `app.js` 三个文件。
-      仍然零构建、零依赖，图表是手写 SVG
-- [ ] `app.js` 已近 800 行，再加功能需要考虑按页面拆模块
-- [x] **`deploy.sh` 保留线上 `config.yaml` 导致新配置项下发不了** — 已加
-      `--config` 开关强制覆盖（旧配置自动备份为 `config.yaml.bak`）。
-      默认仍保留线上配置，新增配置项时记得带上这个参数
+## 贡献
 
-## 设计上有意不做的
+欢迎 issue 和 PR，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-- **不做公网暴露** — 面板聚合了全部基础设施状态，是攻击者最想要的情报，
-  加上防火墙写操作之后更是如此。它的设计前提是只在内网或 VPN 里访问，
-  因此没有完整的登录体系。写操作靠 `firewall.write_token` 保护，**不配置就
-  默认全部拒绝**；确实在可信内网里图省事，才显式打开 `allow_anonymous_write`。
-  真要放到公网，请在前面加一层带认证的反向代理，别只靠这个令牌
-- **不做告警规则引擎** — 阈值判断放在配置里够用，不引入规则 DSL
-- **不用 privileged** — 容器只加 `SYS_ADMIN` 一个 capability（btrfs ioctl 需要），
-  其余靠只读挂载解决。最初判断"容器化必须 privileged"是错的，实测只需这一项
+特别欢迎这几类：
+
+- **其他发行版/NAS 系统的适配经验** —— 群晖、威联通、unRAID 上的路径差异
+- **界面翻译** —— 目前只有中文
+- **新的采集器** —— 接口很简单，一个 `collect(cfg)` 函数返回 dict
+
+---
+
+## 许可
+
+[MIT](LICENSE)
