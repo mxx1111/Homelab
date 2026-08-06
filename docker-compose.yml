@@ -1,0 +1,58 @@
+services:
+  homelab-dashboard:
+    build: .
+    image: homelab-dashboard:latest
+    container_name: homelab-dashboard
+    restart: unless-stopped
+
+    # Server 酱 SendKey 等密钥走 .env，不写进 config.yaml（那个要进版本库）
+    env_file:
+      - .env
+
+    # host 网络的两个作用：
+    #  1. /proc/net/dev 读到的是宿主机真实网卡，否则只有容器的虚拟网卡
+    #  2. 服务探针能直接访问 127.0.0.1 上的各服务，不用绕 bridge
+    network_mode: host
+
+    # btrfs subvolume list 走 BTRFS_IOC_TREE_SEARCH ioctl，需要这个 capability。
+    # 只加这一个，不用 privileged。
+    cap_add:
+      - SYS_ADMIN
+      # smartctl 读 SMART 走 SG_IO ioctl，需要这个。仍然不用 privileged
+      - SYS_RAWIO
+
+    # 光挂 /dev 不够——Docker 的 device cgroup 默认禁止访问块设备。
+    # 8 是 SCSI/SATA 磁盘主设备号，259 是 NVMe。只给读，不给 mknod
+    device_cgroup_rules:
+      - 'b 8:* r'
+      - 'b 259:* r'
+
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      # 历史库。唯一的可写挂载，容器重建后历史不丢
+      - ./data:/app/data
+      # Docker 容器列表与资源占用。
+      # docker CLI 直接挂宿主机的二进制，不装进镜像——宿主机与镜像同为 Debian 12，
+      # libc 版本一致可直接运行，省掉构建时 50MB 下载。
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # 存储容量与 btrfs 快照。
+      # 宿主机根分区必须单独挂到 /hostfs——容器内的 / 是自己的 overlay 根，
+      # 它落在 docker 的 data-root 所在卷上，直接读 / 会得到那个卷的数字。
+      - /:/hostfs:ro
+      # 额外的存储卷按需自己加，例如：
+      #   - /mnt/data:/mnt/data:ro
+      # 本机专属的挂载建议写进 docker-compose.override.yml（不进版本库），
+      # compose 会自动合并，这样升级时不必每次改这个文件
+      # CrowdSec 告警明细。挂目录而非单文件，SQLite 需要同时读 -wal/-shm
+      - /var/lib/crowdsec/data:/var/lib/crowdsec/data:ro
+      # 封禁/解封走 LAPI，需要 machine 凭据。宿主机上不装任何东西，
+      # 容器只读这一个文件 + 访问 127.0.0.1:8080
+      - /etc/crowdsec/local_api_credentials.yaml:/etc/crowdsec/local_api_credentials.yaml:ro
+      # 远程主机采集用的私钥（配了 remote_hosts 才需要）：
+      #   - /root/.ssh/id_remote:/root/.ssh/id_remote:ro
+      # CPU 温度
+      - /sys/class/thermal:/sys/class/thermal:ro
+      - /etc/localtime:/etc/localtime:ro
+      # 硬盘 SMART。挂 /dev 才看得到 /dev/sdX，配合 SYS_RAWIO 读健康数据
+      - /dev:/dev:ro

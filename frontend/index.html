@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Homelab</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>Homelab</h1>
+      <span class="sub" id="siteName"></span>
+    </div>
+    <nav>
+      <button class="on" data-tab="overview">总览</button>
+      <button data-tab="firewall">防火墙</button>
+      <button data-tab="conns">连接</button>
+      <button data-tab="ports">端口</button>
+      <button data-tab="history">历史</button>
+      <button data-tab="containers">容器</button>
+      <button data-tab="settings">设置</button>
+    </nav>
+    <div class="status"><span class="pulse" id="pulse"></span><span id="updated">连接中…</span></div>
+  </header>
+
+  <div id="alertbar" class="alertbar"></div>
+
+  <!-- 总览 -->
+  <div id="overview" class="grid"></div>
+
+  <!-- 防火墙 -->
+  <div id="firewall" class="hide">
+    <div class="grid">
+      <!-- 操作区静态渲染，不参与轮询重绘，否则输入到一半会被清掉 -->
+      <div class="card full flat">
+        <h2><span class="dot info"></span>封禁操作</h2>
+        <div id="fwOff" class="callout hide"></div>
+        <div class="form">
+          <input class="ip" id="banIp" placeholder="IP 或网段，如 1.2.3.4 / 1.2.3.0/24"
+                 autocomplete="off" spellcheck="false">
+          <select id="banDur"></select>
+          <input class="why" id="banWhy" placeholder="备注（可选）" autocomplete="off">
+          <button class="btn" id="banBtn">封禁</button>
+        </div>
+        <div class="form hide" id="tokenRow" style="margin-top:10px">
+          <input id="tokenIn" type="password" placeholder="操作令牌" autocomplete="off"
+                 style="flex:1; min-width:180px">
+          <button class="btn ghost" id="tokenSave">记住</button>
+        </div>
+        <div class="note" id="fwNote"></div>
+      </div>
+
+      <div class="card span2" id="fwTop"></div>
+      <div class="card" id="fwStat"></div>
+      <div class="card span2" id="fwGeo"></div>
+      <div class="card" id="fwAsn"></div>
+      <div class="card span2" id="fwSources"></div>
+      <div class="card" id="fwScenarios"></div>
+
+      <div class="card full flat">
+        <h2><span class="dot ok"></span>白名单
+          <span class="right">命中即自动解封，不改 CrowdSec 配置</span></h2>
+        <div class="form">
+          <input class="ip" id="wlIp" placeholder="IP 或网段，如 1.2.3.4 / 1.2.3.0/24"
+                 autocomplete="off" spellcheck="false">
+          <input class="why" id="wlNote" placeholder="备注（如：公司出口 IP）" autocomplete="off">
+          <button class="btn ghost" id="wlBtn">加入白名单</button>
+        </div>
+        <div id="wlList" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card full flat">
+        <h2><span class="dot"></span>封禁列表</h2>
+        <div class="filters">
+          <input id="fwSearch" placeholder="搜索 IP、场景、AS…" autocomplete="off">
+          <button class="chip on" data-kind="all">全部</button>
+          <button class="chip" data-kind="manual">手动</button>
+          <button class="chip" data-kind="detected">自动检出</button>
+          <button class="chip" data-kind="community">社区黑名单</button>
+        </div>
+        <div class="scroll" id="fwList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 连接 -->
+  <div id="conns" class="hide">
+    <div class="grid">
+      <div class="card" id="connStat"></div>
+      <div class="card span2" id="connPorts"></div>
+      <div class="card full flat">
+        <h2><span class="dot"></span>活跃连接
+          <span class="right" id="connNote"></span></h2>
+        <div class="filters">
+          <input id="connSearch" placeholder="搜索 IP、端口、服务、国家…" autocomplete="off">
+          <button class="chip on" data-conn="external">仅外网</button>
+          <button class="chip" data-conn="inbound">入站</button>
+          <button class="chip" data-conn="outbound">出站</button>
+          <button class="chip" data-conn="all">全部</button>
+        </div>
+        <div class="scroll tall" id="connList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 端口 -->
+  <div id="ports" class="hide">
+    <div class="grid">
+      <div class="card" id="portStat"></div>
+      <div class="card span2" id="portPublic"></div>
+      <div class="card full flat">
+        <h2><span class="dot"></span>全部监听端口</h2>
+        <div class="filters">
+          <input id="portSearch" placeholder="搜索端口、服务名…" autocomplete="off">
+          <button class="chip on" data-plevel="all">全部</button>
+          <button class="chip" data-plevel="public">公网暴露</button>
+          <button class="chip" data-plevel="lan">内网可达</button>
+          <button class="chip" data-plevel="safe">仅本机</button>
+        </div>
+        <div class="scroll tall" id="portList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史 -->
+  <div id="history" class="hide">
+    <div class="filters">
+      <button class="chip" data-range="6">6 小时</button>
+      <button class="chip on" data-range="24">24 小时</button>
+      <button class="chip" data-range="168">7 天</button>
+      <button class="chip" data-range="720">30 天</button>
+    </div>
+
+    <!-- 三个区块各自成行。混在一个 grid 里的话，卡片数量凑不满整行时
+         下一块的内容会被 dense 回填上来，排版就散了 -->
+    <div class="section"><h3>趋势</h3><i class="rule"></i>
+      <span class="meta" id="histSpan"></span></div>
+    <div class="grid cols4" id="histCharts"></div>
+
+    <div class="section"><h3>记录</h3><i class="rule"></i></div>
+    <div class="grid cols2">
+      <div class="card flat">
+        <h2><span class="dot"></span>事件时间线</h2>
+        <div class="scroll fixed"><div class="timeline" id="histEvents"></div></div>
+      </div>
+      <div class="card flat">
+        <h2><span class="dot"></span>操作审计
+          <span class="right">
+            <button class="chip on" data-audit="all">全部</button>
+            <button class="chip" data-audit="failed">仅失败</button>
+          </span></h2>
+        <div class="scroll fixed" id="auditList"></div>
+      </div>
+    </div>
+
+    <div class="section"><h3>统计</h3><i class="rule"></i></div>
+    <div class="grid cols4">
+      <!-- 这四张内容量接近，不加 .top，让底边对齐 -->
+      <div class="card flat" id="histGrowth"></div>
+      <div class="card flat" id="auditStat"></div>
+      <div class="card flat" id="banStat"></div>
+      <div class="card flat" id="histNote"></div>
+    </div>
+  </div>
+
+  <!-- 容器 -->
+  <div id="containers" class="hide">
+    <div class="grid">
+      <div class="card full flat">
+        <h2><span class="dot"></span>容器管理
+          <span class="right" id="ctrNote"></span></h2>
+        <div class="scroll tall" id="ctrList"></div>
+      </div>
+      <div class="card full flat">
+        <h2><span class="dot"></span>快照
+          <span class="right">保留最近 <input id="snapKeep" type="number" value="10"
+            min="1" max="200" style="width:64px; padding:4px 8px; font-size:12.5px">
+            个</span></h2>
+        <div id="snapList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div id="settings" class="hide">
+    <div class="grid">
+      <div class="card full flat">
+        <h2><span class="dot info"></span>告警总开关
+          <span class="right" id="setNotify"></span></h2>
+        <div id="setGlobal"></div>
+      </div>
+      <div class="card full flat">
+        <h2><span class="dot"></span>告警规则</h2>
+        <div id="setRules"></div>
+        <div class="form" style="margin-top:14px">
+          <button class="btn" id="setSave">保存</button>
+          <button class="btn ghost" id="setReset">恢复默认</button>
+          <span class="note" id="setHint" style="margin:0"></span>
+        </div>
+      </div>
+      <div class="card full flat">
+        <h2><span class="dot"></span>已忽略的告警
+          <span class="right">忽略后不再显示，也不再推送</span></h2>
+        <div id="setMuted"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<div id="modal"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

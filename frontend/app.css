@@ -1,0 +1,404 @@
+/* 配色取自 Claude 官网：象牙底 + 陶土橙，状态色统一往暖里调，
+   避免纯绿纯红在米色背景上跳出来 */
+:root{
+  --bg:#F0EEE6; --card:#FFFFFF; --card-alt:#F7F5EF;
+  --border:#E3E0D8; --border-strong:#D5D1C6;
+  --text:#141413; --dim:#73716C; --faint:#A3A099;
+  --accent:#D97757; --accent-hover:#C56647; --accent-soft:rgba(217,119,87,.10);
+  --ok:#7A9A65; --warn:#C1852A; --crit:#BC4C3C;
+  --ok-soft:rgba(122,154,101,.13); --warn-soft:rgba(193,133,42,.13);
+  --crit-soft:rgba(188,76,60,.12);
+  /* 多线图的系列色。第一条沿用主色，其余冷暖交替排开——
+     同色系挨着放，两条线在米色底上会看混 */
+  --s1:#5F8AA0; --s2:#7A9A65; --s3:#C1852A; --s4:#9B7BA8;
+  --radius:12px; --radius-sm:8px;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",
+         "Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1F1E1D; --card:#2A2927; --card-alt:#232220;
+    --border:#3A3936; --border-strong:#4A4844;
+    --text:#F0EEE6; --dim:#A8A59E; --faint:#7A7770;
+    --accent:#E08A6B; --accent-hover:#EC9A7C; --accent-soft:rgba(224,138,107,.13);
+    --ok:#8FAE79; --warn:#D19B44; --crit:#D46A57;
+    --s1:#7FAAC2; --s2:#8FAE79; --s3:#D19B44; --s4:#B79BC4;
+  }
+}
+*{box-sizing:border-box; margin:0; padding:0}
+body{
+  background:var(--bg); color:var(--text); min-height:100vh;
+  font:15px/1.6 var(--sans); -webkit-font-smoothing:antialiased;
+  padding:0 20px 64px;
+}
+/* 宽屏不封死宽度，靠列数自增来吃掉横向空间 */
+.wrap{max-width:2200px; margin:0 auto}
+
+/* ---------- 顶栏 ---------- */
+header{
+  display:flex; align-items:center; gap:20px; flex-wrap:wrap;
+  /* 负 margin 抵消 body 的左右 padding，让背景铺满视口宽度——
+     否则 sticky 之后两侧会露出底下滚动的卡片 */
+  margin:0 -20px 22px; padding:26px 20px 18px;
+  border-bottom:1px solid var(--border);
+  position:sticky; top:0; z-index:50;
+  background:var(--bg);
+  transition:padding .18s, box-shadow .18s;
+}
+/* 滚下去之后收紧一点并加投影，腾出屏幕高度同时把层次分开 */
+header.scrolled{
+  padding:12px 20px 11px;
+  box-shadow:0 4px 16px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme:dark){
+  header.scrolled{box-shadow:0 4px 16px rgba(0,0,0,.35)}
+}
+header.scrolled .brand h1{font-size:20px}
+.brand{display:flex; align-items:baseline; gap:11px}
+.brand h1{font:500 25px/1 var(--serif); letter-spacing:-.2px}
+.brand .sub{font-size:12.5px; color:var(--faint)}
+
+nav{display:flex; gap:3px; background:var(--card-alt); padding:3px;
+    border-radius:10px; border:1px solid var(--border); flex-wrap:wrap}
+nav button{
+  font:500 13.5px/1 var(--sans); color:var(--dim); background:none; border:none;
+  padding:8px 15px; border-radius:7px; cursor:pointer; transition:.16s;
+  display:flex; align-items:center; gap:6px;
+}
+nav button:hover{color:var(--text)}
+nav button.on{background:var(--card); color:var(--text);
+              box-shadow:0 1px 2px rgba(0,0,0,.05)}
+@media (prefers-color-scheme:dark){ nav button.on{box-shadow:none} }
+nav .badge{font-size:10px; font-weight:600; padding:1px 5px; border-radius:9px;
+           background:var(--crit); color:#fff; line-height:1.5}
+nav .badge.warn{background:var(--warn)}
+
+.status{margin-left:auto; display:flex; align-items:center; gap:8px;
+        font-size:12.5px; color:var(--faint); font-variant-numeric:tabular-nums}
+.pulse{width:6px; height:6px; border-radius:50%; background:var(--ok);
+       animation:breathe 2.4s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid; gap:16px; grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+
+/* 总览走瀑布流而不是等高网格。卡片内容天生长短不一（服务健康 10 行 vs
+   端口暴露 3 行），等高网格会把短卡片拉高、内部留出大片空白。columns 让
+   每张卡贴合自身内容，列与列之间自动找平。
+   只有总览用它——其他页有需要跨整行的卡片，columns 里做不到 */
+#overview{columns:366px auto; column-gap:16px}
+#overview .card{
+  break-inside:avoid; -webkit-column-break-inside:avoid;
+  margin-bottom:16px; display:block; min-height:0;
+}
+/* 瀑布流下卡片高度自由，列表就不必再截断 */
+#overview .list{max-height:none; min-height:0}
+#overview .card.span2{grid-column:auto}
+.card{
+  background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+  padding:18px 20px; display:flex; flex-direction:column; min-height:152px;
+  transition:border-color .18s;
+}
+.card:hover{border-color:var(--border-strong)}
+.card.span2{grid-column:span 2}
+.card.full{grid-column:1/-1}
+.card.flat{min-height:0}
+/* 内容天生短的卡片别被同行的长列表拉高——贴合自身高度，
+   底下留背景色比留一大块白色卡片好看 */
+.card.top{align-self:start}
+/* dense 让后面的小卡片回填前面留下的空隙，宽屏下不会右半边全空 */
+.grid.dense{grid-auto-flow:row dense}
+
+/* auto-fit 而不是 auto-fill：轨道数超过卡片数时把空轨道折叠掉，
+   四张卡就等分整行，不会在右边留出空列 */
+.grid.cols4{grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}
+.grid.cols2{grid-template-columns:repeat(auto-fit,minmax(440px,1fr))}
+
+/* ---------- 区块分隔 ---------- */
+.section{display:flex; align-items:center; gap:14px; margin:26px 2px 12px}
+.section:first-of-type{margin-top:4px}
+.section h3{font:600 12.5px/1 var(--sans); color:var(--dim); letter-spacing:.06em}
+.section .rule{flex:1; height:1px; background:var(--border)}
+.section .meta{font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums}
+@media (max-width:760px){
+  .card.span2{grid-column:span 1}
+  body{padding:0 14px 48px}
+  header{gap:14px; margin:0 -14px 16px; padding:16px 14px 12px}
+  header.scrolled{padding:10px 14px 9px}
+  .status{width:100%; margin-left:0}
+  nav{width:100%}
+  nav button{flex:1; justify-content:center; padding:8px 10px}
+}
+
+.card h2{
+  font:600 11px/1 var(--sans); color:var(--dim); letter-spacing:1.3px;
+  text-transform:uppercase; margin-bottom:16px;
+  display:flex; align-items:center; gap:8px;
+}
+.card h2 .right{margin-left:auto; text-transform:none; letter-spacing:0;
+                font-weight:400; color:var(--faint); font-size:11.5px}
+.dot{width:7px; height:7px; border-radius:50%; flex:none; background:var(--faint)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+.dot.crit{background:var(--crit)} .dot.info{background:var(--accent)}
+
+.big{font:500 33px/1.05 var(--serif); font-variant-numeric:tabular-nums;
+     letter-spacing:-.6px}
+.big.sm{font-size:26px}
+.unit{font:400 13px/1 var(--sans); color:var(--dim); margin-left:5px}
+.sub{color:var(--dim); font-size:12.5px; margin-top:6px}
+
+.row{display:flex; justify-content:space-between; align-items:center; gap:10px;
+     padding:7px 0; border-bottom:1px solid var(--border); font-size:13.5px}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--dim); display:flex; align-items:center; gap:7px; min-width:0}
+.row .k > span:not(.dot):not(.tag){overflow:hidden; text-overflow:ellipsis;
+                                    white-space:nowrap}
+.row .v{font-variant-numeric:tabular-nums; flex:none; color:var(--text)}
+.row .v.dim{color:var(--faint)}
+
+.bar{height:5px; background:var(--border); border-radius:3px; overflow:hidden;
+     margin:8px 0 3px}
+.bar i{display:block; height:100%; border-radius:3px; background:var(--ok);
+       transition:width .5s cubic-bezier(.4,0,.2,1)}
+.bar i.warn{background:var(--warn)} .bar i.crit{background:var(--crit)}
+
+.stats{display:flex; gap:24px; margin-bottom:14px; flex-wrap:wrap}
+.stat .n{font:500 22px/1.1 var(--serif); font-variant-numeric:tabular-nums}
+.stat .l{font-size:10.5px; color:var(--faint); text-transform:uppercase;
+         letter-spacing:.7px; margin-top:3px}
+
+/* flex:1 让列表吃掉卡片剩余高度：同一行等高，内容多的就能多显示几条 */
+.list{flex:1 1 auto; min-height:96px; max-height:min(420px,52vh);
+      overflow-y:auto; margin:0 -4px; padding:0 4px}
+.list::-webkit-scrollbar{width:4px}
+.list::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:2px}
+.list::-webkit-scrollbar-track{background:transparent}
+
+.tag{font:500 10.5px/1.5 var(--sans); padding:2px 7px; border-radius:5px;
+     background:var(--card-alt); color:var(--dim); border:1px solid var(--border);
+     flex:none; white-space:nowrap}
+.tag.ok{background:var(--ok-soft); color:var(--ok); border-color:transparent}
+.tag.warn{background:var(--warn-soft); color:var(--warn); border-color:transparent}
+.tag.crit{background:var(--crit-soft); color:var(--crit); border-color:transparent}
+.tag.accent{background:var(--accent-soft); color:var(--accent); border-color:transparent}
+
+.mono{font-family:var(--mono); font-size:12.5px}
+.empty{color:var(--faint); font-size:13px; padding:22px 0; text-align:center}
+.note{color:var(--faint); font-size:11.5px; margin-top:10px; line-height:1.5}
+.stale{opacity:.5}
+.center{margin:auto 0}
+
+/* ---------- 图表 ---------- */
+.chart{width:100%; display:block; overflow:visible}
+.chart .area{fill:var(--accent); opacity:.11}
+.chart .line{fill:none; stroke:var(--accent); stroke-width:1.6;
+             stroke-linejoin:round; stroke-linecap:round}
+.chart .line.s1{stroke:var(--s1)}
+.chart .line.s2{stroke:var(--s2)}
+.chart .line.s3{stroke:var(--s3)}
+.chart .line.s4{stroke:var(--s4)}
+.chart .grid-line{stroke:var(--border); stroke-width:1}
+.chart .axis{fill:var(--faint); font:10.5px var(--sans)}
+.chart .cursor{stroke:var(--border-strong); stroke-width:1; stroke-dasharray:3 3}
+.chart .peak{fill:var(--accent)}
+.spark{height:38px; margin:6px 0 2px}
+.chartbox{position:relative; margin-top:6px}
+.legend{display:flex; flex-wrap:wrap; gap:2px 14px; margin:0 0 6px; font-size:11.5px}
+.legend span{display:inline-flex; align-items:center; gap:6px; color:var(--dim)}
+.legend i{width:10px; height:2.5px; border-radius:2px; background:var(--accent)}
+.legend .s1 i{background:var(--s1)} .legend .s2 i{background:var(--s2)}
+.legend .s3 i{background:var(--s3)} .legend .s4 i{background:var(--s4)}
+.legend b{color:var(--text); font-weight:600; font-variant-numeric:tabular-nums}
+.legend em{font-style:normal; color:var(--faint); font-size:11px;
+           font-variant-numeric:tabular-nums}
+.chartbox .hint{position:absolute; right:0; top:-20px; font-size:11.5px;
+                color:var(--faint); font-variant-numeric:tabular-nums}
+.chart-empty{height:120px; display:flex; align-items:center; justify-content:center;
+             color:var(--faint); font-size:12.5px; background:var(--card-alt);
+             border-radius:var(--radius-sm)}
+
+/* ---------- 表单 ---------- */
+input,select,textarea{
+  font:14px/1 var(--sans); color:var(--text); background:var(--card);
+  border:1px solid var(--border-strong); border-radius:var(--radius-sm);
+  padding:9px 11px; transition:.16s; min-width:0;
+}
+input:focus,select:focus{outline:none; border-color:var(--accent);
+                         box-shadow:0 0 0 3px var(--accent-soft)}
+input::placeholder{color:var(--faint)}
+select{cursor:pointer; appearance:none; padding-right:30px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2373716C' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 11px center}
+
+.btn{
+  font:500 13.5px/1 var(--sans); padding:10px 17px; border-radius:var(--radius-sm);
+  border:1px solid transparent; cursor:pointer; transition:.16s; white-space:nowrap;
+  background:var(--accent); color:#fff;
+}
+.btn:hover{background:var(--accent-hover)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.45; cursor:not-allowed; transform:none}
+.btn.ghost{background:transparent; color:var(--dim); border-color:var(--border-strong)}
+.btn.ghost:hover{background:var(--card-alt); color:var(--text)}
+.btn.sm{font-size:12px; padding:5px 11px; border-radius:6px}
+.btn.danger{background:var(--crit); color:#fff}
+.btn.danger:hover{filter:brightness(1.08)}
+.btn.confirm{background:var(--warn); color:#fff}
+
+.form{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+.form input.ip{flex:1; min-width:170px; font-family:var(--mono); font-size:13px}
+.form input.why{flex:1.3; min-width:150px}
+
+/* ---------- 表格 ---------- */
+.tbl{width:100%; border-collapse:collapse; font-size:13.5px}
+.tbl th{
+  font:600 10.5px/1 var(--sans); color:var(--faint); text-transform:uppercase;
+  letter-spacing:.8px; text-align:left; padding:0 12px 10px 0;
+  border-bottom:1px solid var(--border); white-space:nowrap;
+}
+.tbl td{padding:9px 12px 9px 0; border-bottom:1px solid var(--border);
+        vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--card-alt)}
+.tbl td.act{text-align:right; padding-right:0; width:1%; white-space:nowrap}
+.tbl .ipcell{font-family:var(--mono); font-size:12.5px; color:var(--text)}
+.tbl .why{color:var(--dim); max-width:240px; overflow:hidden;
+          text-overflow:ellipsis; white-space:nowrap}
+.scroll{overflow:auto; max-height:430px; margin:0 -2px; padding:0 2px}
+.scroll.tall{max-height:min(640px,66vh)}
+/* 并排的两个长列表用固定高度而非 max-height：一个 8 条、一个 30 条时，
+   max-height 会让两张卡一高一矮，底边对不齐 */
+.scroll.fixed{height:min(460px,58vh); max-height:none}
+.scroll::-webkit-scrollbar{width:5px; height:5px}
+.scroll::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:3px}
+
+.filters{display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin-bottom:14px}
+.filters input{flex:1; min-width:150px}
+.chip{
+  font:500 12px/1 var(--sans); padding:6px 12px; border-radius:20px; cursor:pointer;
+  border:1px solid var(--border-strong); background:transparent; color:var(--dim);
+  transition:.16s;
+}
+.chip:hover{border-color:var(--accent); color:var(--text)}
+.chip.on{background:var(--text); color:var(--bg); border-color:var(--text)}
+
+.callout{
+  background:var(--accent-soft); border:1px solid transparent;
+  border-left:2.5px solid var(--accent); border-radius:var(--radius-sm);
+  padding:11px 14px; font-size:12.5px; color:var(--dim); line-height:1.55;
+  margin-bottom:16px;
+}
+.callout.warn{background:var(--warn-soft); border-left-color:var(--warn)}
+.callout.crit{background:var(--crit-soft); border-left-color:var(--crit)}
+.callout b{color:var(--text); font-weight:600}
+.callout code{font-family:var(--mono); font-size:11.5px; background:var(--card);
+              padding:1px 5px; border-radius:4px}
+
+/* ---------- 告警条 ---------- */
+.alertbar{display:flex; flex-direction:column; gap:8px; margin-bottom:18px}
+.alertline{
+  display:flex; align-items:center; gap:11px; padding:11px 15px;
+  background:var(--card); border:1px solid var(--border);
+  border-left:2.5px solid var(--warn); border-radius:var(--radius-sm);
+  font-size:13.5px;
+}
+.alertline.crit{border-left-color:var(--crit)}
+.alertline .t{font-weight:500}
+.alertline .d{color:var(--dim); font-size:12.5px; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap}
+.alertline .when{margin-left:auto; color:var(--faint); font-size:12px;
+                 white-space:nowrap; font-variant-numeric:tabular-nums}
+
+/* ---------- 事件时间线 ---------- */
+.timeline{position:relative; padding-left:19px}
+.timeline::before{content:""; position:absolute; left:4px; top:6px; bottom:6px;
+                  width:1px; background:var(--border)}
+.tl-item{position:relative; padding:8px 0 8px 2px; font-size:13.5px}
+.tl-item::before{content:""; position:absolute; left:-19px; top:14px;
+                 width:7px; height:7px; border-radius:50%;
+                 background:var(--faint); border:2px solid var(--bg)}
+.tl-item.crit::before{background:var(--crit)}
+.tl-item.warn::before{background:var(--warn)}
+.tl-item.info::before{background:var(--ok)}
+.tl-item .t{display:flex; align-items:center; gap:8px}
+.tl-item .d{color:var(--dim); font-size:12.5px; margin-top:2px}
+.tl-item .when{color:var(--faint); font-size:11.5px; margin-top:2px;
+               font-variant-numeric:tabular-nums}
+
+/* ---------- 日志查看 ---------- */
+.modal{
+  position:fixed; inset:0; z-index:200; background:rgba(20,20,19,.45);
+  display:flex; align-items:center; justify-content:center; padding:24px;
+  animation:fade .18s;
+}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.modal-box{
+  background:var(--card); border:1px solid var(--border-strong);
+  border-radius:var(--radius); width:min(1100px,100%); max-height:86vh;
+  display:flex; flex-direction:column; overflow:hidden;
+  box-shadow:0 18px 50px rgba(0,0,0,.20);
+}
+.modal-head{display:flex; align-items:center; gap:12px; padding:15px 19px;
+            border-bottom:1px solid var(--border)}
+.modal-head h3{font:500 16px/1 var(--serif)}
+.modal-head .sp{margin-left:auto}
+.logbox{
+  flex:1; overflow:auto; padding:14px 19px; margin:0;
+  font:12px/1.65 var(--mono); white-space:pre-wrap; word-break:break-all;
+  background:var(--card-alt); color:var(--text);
+}
+.logbox::-webkit-scrollbar{width:6px; height:6px}
+.logbox::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:3px}
+
+/* ---------- toast ---------- */
+#toasts{position:fixed; right:20px; bottom:20px; z-index:300;
+        display:flex; flex-direction:column; gap:9px;
+        max-width:min(400px,calc(100vw - 40px))}
+.toast{
+  background:var(--card); border:1px solid var(--border-strong);
+  border-left:2.5px solid var(--ok); border-radius:var(--radius-sm);
+  padding:12px 15px; font-size:13.5px; line-height:1.5;
+  box-shadow:0 6px 22px rgba(0,0,0,.10);
+  animation:slide .26s cubic-bezier(.2,.9,.3,1);
+}
+.toast.err{border-left-color:var(--crit)}
+.toast b{display:block; font-weight:600; margin-bottom:2px; font-size:13px}
+.toast span{color:var(--dim); font-size:12.5px}
+@keyframes slide{from{opacity:0; transform:translateX(18px)}to{opacity:1; transform:none}}
+@media (prefers-color-scheme:dark){
+  .toast{box-shadow:0 6px 22px rgba(0,0,0,.4)}
+  .modal-box{box-shadow:0 18px 50px rgba(0,0,0,.5)}
+}
+
+.hide{display:none !important}
+
+/* ---------- 窄屏 ----------
+   表格列多，手机上横向滚动很难用。标了 .opt 的是次要列，窄屏直接不显示，
+   留下的都是一眼要看的和能点的。比把表格改成卡片式改动小得多，效果够用 */
+@media (max-width:640px){
+  .tbl .opt, .tbl th.opt{display:none}
+  .tbl th{padding-right:8px; font-size:10px}
+  .tbl td{padding-right:8px; font-size:12.5px}
+  .tbl .why{max-width:120px}
+  .btn.sm{padding:5px 9px; font-size:11.5px}
+
+  /* 导航六个页签，横排放不下就横向滚动，不要换行堆成两排 */
+  nav{overflow-x:auto; flex-wrap:nowrap; -webkit-overflow-scrolling:touch;
+      scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  nav button{flex:0 0 auto; padding:8px 13px}
+
+  .brand h1{font-size:21px}
+  /* 窄屏 sticky 头别占太高，状态行挪到导航下面单独一行已经够挤了 */
+  .status{font-size:11.5px}
+  .big{font-size:27px}
+  .stats{gap:16px}
+  .card{padding:15px 16px}
+  .form input, .form select, .form .btn{width:100%; flex:none}
+  .filters input{width:100%; flex:none}
+  .modal{padding:10px}
+  .logbox{font-size:11px; padding:11px 13px}
+  #toasts{right:10px; left:10px; bottom:10px; max-width:none}
+}

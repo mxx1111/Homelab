@@ -1,0 +1,19 @@
+[Unit]
+Description=Homelab Dashboard
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/homelab-dashboard
+Environment=HOMELAB_CONFIG=/opt/homelab-dashboard/config.yaml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/homelab-dashboard/venv/bin/python /opt/homelab-dashboard/run.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

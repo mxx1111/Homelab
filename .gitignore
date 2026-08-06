@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# 历史库，部署时自动生成
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 含 Server 酱 SendKey
+scripts/watchdog.env
+.env
+
+# 本机实际配置，从 config.example.yaml 复制而来。含域名、内网地址、服务清单
+config.yaml
+config.yaml.bak
+
+# 部署目标主机与 sudo 密码
+.deploy.env
+
+# 本机专属的容器挂载，compose 自动合并
+docker-compose.override.yml
+
+# 本机私有笔记：网络拓扑、设备台账等，不进版本库
+private/
