@@ -1,0 +1,31 @@
+# 公开演示实例的额外加固。仅在把演示站暴露到公网时叠加使用：
+#
+#   docker compose -f docker-compose.demo.yml -f docker-compose.demo.hardening.yml up -d
+#
+# 单独一个文件而不是并进主 demo 文件，是因为它会去掉端口映射，
+# 本地随手跑一下看效果的人不需要这份麻烦。
+#
+# 做的事：把容器放进 internal 网络。容器从此没有任何出站路由——
+# 连宿主机网关都不通，更别说公网。演示模式本就不需要出站，
+# 这纯粹是纵深防御：万一以后给面板加了带 URL 参数的功能，
+# SSRF 也无处可去。
+#
+# 代价：internal 网络下 Docker 不建立端口映射（docker port 为空），
+# 所以反向代理不能再走 127.0.0.1:8771，得直连容器 IP。
+# 为此固定了容器地址，nginx 里写：
+#
+#   proxy_pass http://172.31.240.2:8770;
+
+services:
+  demo:
+    networks:
+      isolated:
+        ipv4_address: 172.31.240.2
+
+networks:
+  isolated:
+    internal: true
+    ipam:
+      config:
+        # /28 够用且避开常见的 172.17-172.26 段
+        - subnet: 172.31.240.0/28
