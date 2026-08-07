@@ -1,5 +1,5 @@
 from . import (certs, connections, containers, crowdsec, disks, engine, host,
-               network, ports, remote, services, storage)
+               network, nodes, ports, remote, services, storage)
 
 # key 需与 config.yaml 的 intervals 对应
 REGISTRY = {
@@ -11,6 +11,7 @@ REGISTRY = {
     "storage": storage.collect,
     "certs": certs.collect,
     "remote": remote.collect,
+    "nodes": nodes.collect,
     "ports": ports.collect,
     "connections": connections.collect,
     "engine": engine.collect,

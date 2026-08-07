@@ -409,10 +409,72 @@ def remote(cfg):
     return {"ok": True, "items": []}
 
 
+# 演示站要展示"一个面板管多台机器"这件事，所以得有节点。但演示站本身
+# 一台机器都连不到（internal 网络，容器出不去），全部编出来
+DEMO_NODES = [
+    {"name": "边缘节点", "hostname": "edge-01", "cores": 4, "mem_gb": 8,
+     "base_load": 0.35, "disks": [("/", 220, 0.61), ("/data", 900, 0.44)],
+     "containers": (12, 15), "ports": (14, 31), "bans": 18220, "latency": 42},
+    {"name": "海外节点", "hostname": "vps-sg", "cores": 2, "mem_gb": 4,
+     "base_load": 0.22, "disks": [("/", 80, 0.37)],
+     "containers": (6, 6), "ports": (9, 12), "bans": 18220, "latency": 186},
+]
+
+
+def nodes(cfg):
+    items = []
+    for i, spec in enumerate(DEMO_NODES):
+        # 用 _wave 而不是纯随机：随机值每次刷新都跳，看着像坏了；
+        # 正弦波配上不同相位，两台机器的曲线各走各的，像真的
+        phase = i * 2.1
+        load1 = round(_wave(900, spec["base_load"] * 0.6, spec["base_load"] * 1.5,
+                            phase, 0.04) * spec["cores"], 2)
+        total_mem = spec["mem_gb"] * 1024 ** 3
+        used_ratio = _wave(1500, 0.38, 0.68, phase + 0.7, 0.02)
+        run, tot = spec["containers"]
+        exposed, loopback = spec["ports"]
+        items.append({
+            "name": spec["name"], "ok": True,
+            "latency_ms": round(_wave(300, spec["latency"] * 0.85,
+                                      spec["latency"] * 1.2, phase)),
+            "hostname": spec["hostname"], "os": "Debian GNU/Linux 12 (bookworm)",
+            "collected_at": int(time.time()), "clock_skew_seconds": 0,
+            "cores": spec["cores"],
+            "load": [load1, round(load1 * 0.95, 2), round(load1 * 0.9, 2)],
+            "load_percent": round(load1 / spec["cores"] * 100, 1),
+            "uptime_seconds": 86400 * (37 + i * 24),
+            "temp_c": round(_wave(1800, 39 + i * 6, 48 + i * 6, phase, 0.3), 1),
+            "memory": {"total": total_mem, "used": int(total_mem * used_ratio),
+                       "available": int(total_mem * (1 - used_ratio)),
+                       "percent": round(used_ratio * 100, 1)},
+            "disks": [{"device": f"/dev/sd{chr(97 + j)}1", "fs": "ext4",
+                       "mount": m, "total": gb * 1024 ** 3,
+                       "used": int(gb * 1024 ** 3 * pct),
+                       "available": int(gb * 1024 ** 3 * (1 - pct)),
+                       "percent": round(pct * 100, 1)}
+                      for j, (m, gb, pct) in enumerate(spec["disks"])],
+            "containers": {"total": tot, "running": run, "stopped": tot - run,
+                           "items": [{"name": f"svc-{n}", "status": "Up 3 days",
+                                      "image": f"svc-{n}:latest"}
+                                     for n in range(1, run + 1)]},
+            "ports": {"exposed": exposed, "loopback": loopback,
+                      "items": [{"port": p, "addr": "0.0.0.0", "proto": "tcp",
+                                 "proc": n} for p, n in
+                                [(22, "sshd"), (80, "nginx"), (443, "nginx")]]},
+            "crowdsec": {"ipset_entries": spec["bans"] + i,
+                         "agent": "active", "bouncer": "active"},
+            "services": {"ssh": "active", "docker": "active",
+                         "crowdsec": "active",
+                         "crowdsec-firewall-bouncer": "active"},
+        })
+    return {"ok": True, "items": items, "configured": len(items),
+            "online": len(items), "offline": 0}
+
+
 REGISTRY = {
     "host": host, "network": network, "containers": containers,
     "services": services, "crowdsec": crowdsec, "storage": storage,
-    "certs": certs, "remote": remote, "ports": ports,
+    "certs": certs, "remote": remote, "nodes": nodes, "ports": ports,
     "connections": connections, "engine": engine, "disks": disks,
 }
 
