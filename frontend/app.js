@@ -1416,6 +1416,7 @@ let activeTab = "overview", lastData = null, lastSections = null, sparkCache = {
 // 站点名来自后端 config 的 site_name，用于头部与主机卡片标题。
 // 拿到之前先用中性占位，别写死任何一台机器的名字
 let siteName = "主机";
+let demoShown = false;
 
 document.querySelectorAll("nav button").forEach(b => {
   b.onclick = () => {
@@ -1604,6 +1605,10 @@ async function refresh() {
     if (body.site_name && body.site_name !== siteName) {
       siteName = body.site_name;
       $("siteName").textContent = siteName;
+    }
+    if (body.demo && !demoShown) {
+      demoShown = true;
+      $("demoBar").classList.remove("hide");
     }
     lastData = s.crowdsec?.data || null;
     renderAlertBar(body.alerts);

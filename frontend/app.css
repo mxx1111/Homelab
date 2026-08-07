@@ -402,3 +402,15 @@ select{cursor:pointer; appearance:none; padding-right:30px;
   .logbox{font-size:11px; padding:11px 13px}
   #toasts{right:10px; left:10px; bottom:10px; max-width:none}
 }
+
+/* ---------- 演示模式横幅 ---------- */
+.demobar{
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+  background:var(--accent-soft); border:1px solid var(--accent);
+  border-radius:var(--radius); padding:12px 16px; margin-bottom:18px;
+  font-size:13px; line-height:1.6;
+}
+.demobar b{color:var(--accent); flex:none}
+.demobar span{color:var(--text); flex:1 1 320px; min-width:0}
+.demobar a{color:var(--accent); text-decoration:none; font-weight:500; flex:none}
+.demobar a:hover{text-decoration:underline}

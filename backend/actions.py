@@ -28,6 +28,8 @@ class Actions:
     def __init__(self, cfg):
         acfg = (cfg or {}).get("actions") or {}
         self.enabled = bool(acfg.get("enabled", True))
+        from . import demo as demo_mod
+        self.demo = demo_mod.enabled(cfg)
         extra = {str(x) for x in (acfg.get("protected_containers") or [])}
         self.protected = ALWAYS_PROTECTED | extra
         self.log_lines = int(acfg.get("log_lines", 200))
@@ -46,6 +48,14 @@ class Actions:
 
     def container(self, name, action):
         self._check(name, action)
+        if self.demo:
+            from . import demo as demo_mod
+            try:
+                demo_mod.container_action(name, action)
+            except KeyError:
+                raise ActionError(f"没有这个容器: {name}") from None
+            return {"ok": True, "container": name, "action": action,
+                    "output": "演示模式：状态只改在内存里，每小时重置"}
         try:
             out = subprocess.run(["docker", action, name],
                                  capture_output=True, text=True, timeout=90)
@@ -62,6 +72,10 @@ class Actions:
     def logs(self, name, lines=None):
         if not VALID_NAME.match(name or ""):
             raise ActionError(f"非法的容器名: {name}")
+        if self.demo:
+            from . import demo as demo_mod
+            return {"ok": True, "container": name, "lines": lines or self.log_lines,
+                    "text": demo_mod.container_logs(name, lines)}
         n = max(1, min(int(lines or self.log_lines), 1000))
         try:
             out = subprocess.run(

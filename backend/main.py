@@ -11,6 +11,7 @@ from .actions import ActionError, Actions, snapshot_plan
 from .alerts import AlertEngine
 from .cache import Store
 from .collectors import REGISTRY
+from . import demo
 from .collectors.crowdsec import search_decisions
 from .config import CONFIG, CONFIG_PATH
 from .firewall import DURATIONS, FirewallError, LapiClient, Whitelist
@@ -29,8 +30,11 @@ notifier = Notifier(CONFIG)
 alert_engine = AlertEngine(CONFIG, history, notifier)
 lapi = LapiClient(CONFIG)
 whitelist = Whitelist(CONFIG, history, lapi)
-store = Store(REGISTRY, CONFIG, history=history, alerts=alert_engine,
-              whitelist=whitelist)
+DEMO = demo.enabled(CONFIG)
+# 演示模式换掉整个采集器注册表：真实采集器一个都不会被调用，
+# 容器里也就不需要挂载任何宿主机路径
+store = Store(demo.REGISTRY if DEMO else REGISTRY, CONFIG, history=history,
+              alerts=alert_engine, whitelist=whitelist)
 actions = Actions(CONFIG)
 
 FIREWALL_CFG = CONFIG.get("firewall") or {}
@@ -49,6 +53,9 @@ async def lifespan(_app: FastAPI):
              "开" if FIREWALL_ENABLED else "关",
              "开" if actions.enabled else "关",
              "开" if notifier.enabled else "关")
+    if DEMO:
+        log.warning("演示模式：全部采集器返回仿真数据，不读取宿主机任何信息；"
+                    "写操作落在内存沙盒，每 %d 分钟重置", demo.RESET_SECONDS // 60)
     if WRITE_TOKEN:
         log.info("写操作认证: 需令牌")
     elif ALLOW_ANON_WRITE:
@@ -58,6 +65,10 @@ async def lifespan(_app: FastAPI):
     else:
         log.info("写操作认证: 已锁定（未配置 write_token，写接口一律 403）")
     history.start()
+    if DEMO:
+        seeded = demo.seed_history(history)
+        if seeded:
+            log.info("演示模式：已播种 %d 条历史采样（过去 7 天）", seeded)
     await store.start()
     yield
     await store.stop()
@@ -132,6 +143,9 @@ def summary():
     snap = store.snapshot()
     snap["alerts"] = alert_engine.snapshot()
     snap["site_name"] = alert_engine.site_name
+    if DEMO:
+        demo.SANDBOX.maybe_reset()
+        snap["demo"] = True
     return JSONResponse(snap)
 
 
@@ -315,6 +329,8 @@ def container_logs(name: str, lines: int = Query(200, ge=1, le=1000)):
 
 @app.get("/api/snapshots")
 def snapshots(keep: int = Query(10, ge=1, le=200)):
+    if DEMO:
+        return demo.snapshots()
     return snapshot_plan(CONFIG, store.snapshot().get("sections") or {}, keep=keep)
 
 

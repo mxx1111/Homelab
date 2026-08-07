@@ -1,0 +1,42 @@
+# 演示实例：完全隔离，不读宿主机任何东西。
+#
+# 和主 compose 的区别是"什么都没有"——没有 host 网络、没有 /hostfs、
+# 没有 docker.sock、没有 CrowdSec 凭据、没有任何 capability。
+# 采集器全部换成仿真数据（backend/demo.py），所以这些挂载一个都不需要。
+# 即使容器被攻破，里面也只有编造的数据和一个空的 SQLite。
+#
+#   docker compose -f docker-compose.demo.yml up -d --build
+#
+# 注意这里刻意不写 `extends` 或复用主文件：演示实例的安全性来自
+# "默认什么都没有"，任何形式的继承都可能把宿主机挂载带进来。
+
+services:
+  demo:
+    build: .
+    image: homelab-dashboard:demo
+    container_name: homelab-demo
+    restart: unless-stopped
+    # 只映射一个端口到本地回环，公网访问由反向代理转发，
+    # 这样容器不会直接暴露在公网上
+    ports:
+      - "127.0.0.1:8771:8770"
+    environment:
+      HOMELAB_DEMO: "1"
+      HOMELAB_CONFIG: /app/config.demo.yaml
+    volumes:
+      # 唯一的挂载：演示用配置（只读）。历史库放在容器内的匿名卷里，
+      # 容器重建即清空，正好当作定期重置
+      - ./config.demo.yaml:/app/config.demo.yaml:ro
+    # 容器被攻破时能做的事越少越好
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: false          # SQLite 需要写 /app/data
+    tmpfs:
+      - /tmp
+    mem_limit: 512m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

@@ -1,0 +1,186 @@
+# Homelab Dashboard 配置
+# 修改后重启服务生效: systemctl restart homelab-dashboard
+
+# 演示实例专用配置。配合 docker-compose.demo.yml 使用。
+# 采集器全部走 backend/demo.py 的仿真数据，这里的 services / certs / storage
+# 都不会被真正探测，留着只是为了让配置结构完整。
+demo: true
+
+site_name: 演示站点
+
+server:
+  host: "0.0.0.0"
+  port: 8770
+
+# 各采集器执行间隔(秒)。慢操作放大间隔，避免拖慢面板
+intervals:
+  host: 10          # CPU/内存/负载
+  network: 5        # 网卡速率
+  containers: 15    # Docker 容器
+  services: 60      # 服务健康探针
+  crowdsec: 30      # 安全告警
+  storage: 300      # 磁盘/快照(btrfs 扫描慢)
+  certs: 3600       # 证书到期
+  remote: 60        # 远程主机采集
+  ports: 120        # 端口暴露审计
+  disks: 1800       # 硬盘 SMART(会唤醒休眠盘，间隔放大)
+  engine: 60        # CrowdSec 引擎状态
+
+# 存储卷。warn/crit 是使用率告警阈值(百分比)
+storage:
+  volumes:
+    # Docker 部署下宿主机根分区挂在 /hostfs，不能直接写 /
+    - label: 系统盘
+      path: /hostfs
+      warn: 80
+      crit: 90
+    # - label: data
+    #   path: /hostfs/mnt/data
+    #   warn: 80
+    #   crit: 90
+  # btrfs 快照扫描的挂载点。非 btrfs 留空即可
+  snapshot_mounts: []
+
+# 服务健康探针。expect 为期望的 HTTP 状态码列表，任一命中即算健康。
+# 探针在本机发起，填 127.0.0.1 即可，不必绕公网一圈
+services:
+  - name: NAS 面板
+    url: https://127.0.0.1:5001/
+    expect: [200, 302, 401]
+    verify_tls: false
+  - name: 反向代理
+    url: http://127.0.0.1:16601/
+    expect: [200, 302, 401, 404]
+  - name: Grafana
+    url: http://127.0.0.1:3000/api/health
+    expect: [200]
+
+# 证书到期检查。warn_days 内变黄，crit_days 内变红
+certs:
+  warn_days: 30
+  crit_days: 7
+  targets:
+    - host: nas.example.com
+      port: 443
+    - host: dav.example.com
+      port: 443
+
+# 网卡。留空自动选择流量最大的物理网卡
+network:
+  interface: ""
+
+crowdsec:
+  # 数据源优先级: 封禁走 LAPI > SQLite > cscli，告警走 SQLite > cscli
+  # SQLite 已能取到全部数据，api_key 可留空（避免密钥进版本库）
+  lapi_url: http://127.0.0.1:8080
+  api_key: ""
+  db_path: /var/lib/crowdsec/data/crowdsec.db
+  metrics_url: http://127.0.0.1:6060/metrics
+  # 封禁/解封用。直接复用 crowdsec agent 的 machine 凭据，
+  # compose 里只读挂载，密钥不进版本库
+  credentials_file: /etc/crowdsec/local_api_credentials.yaml
+  # 额外的不可封禁网段。内网段和 Tailscale 段代码里已硬保护，这里只做补充
+  protected_networks: []
+
+firewall:
+  # 关掉则面板只读，封禁接口一律 403
+  enabled: true
+  # 填一串随机字符，前端会多出一个令牌输入框。
+  # 这个令牌同时保护容器操作与测试推送
+  write_token: ""
+  # 没填 write_token 时，写操作默认一律拒绝——面板能封 IP 能重启容器，
+  # 却没有登录体系，"不配就放行"等于留一个无认证的后门。
+  # 只有确认它仅暴露于可信内网时，才改成 true
+  # 演示实例开放写操作：它们只落在 backend/demo.py 的内存沙盒里，
+  # 碰不到任何真实系统，每小时重置
+  allow_anonymous_write: true
+
+# 指标与事件历史。落 SQLite，容器里挂在 /app/data
+history:
+  enabled: true
+  path: /app/data/homelab.db
+  retain_days: 14      # 演示实例不需要留太久
+
+# 告警推送。走 Server 酱
+notify:
+  # 演示实例必须显式关掉：否则访客点一下"测试推送"就发到维护者手机上了
+  enabled: false
+  # SendKey 不写这里——config.yaml 要进版本库。放 .env 的 HOMELAB_SENDKEY，
+  # compose 通过 env_file 注入
+  sendkey: ""
+  # Server 酱的通道号，留空用默认通道
+  channel: ""
+  # 低于此级别不推送: info < warn < crit
+  min_level: warn
+
+alerts:
+  enabled: true
+  # 异常必须连续存在这么久才推送，压掉探针偶发超时造成的误报
+  sustain_seconds: 120
+  # 同一个问题没解决时，隔多久重复提醒一次
+  repeat_hours: 12
+  # 问题消失时补一条恢复通知
+  notify_recovery: true
+  rules:
+    storage:
+      enabled: true
+      warn: 80
+      crit: 90
+    service:
+      enabled: true
+    cert:
+      enabled: true
+      warn_days: 30
+      crit_days: 7
+    host:
+      enabled: true
+      cpu_percent: 90
+      mem_percent: 92
+      temp_c: 75
+    # 新增封禁时提醒。只报本地检出和手动封的，
+    # 社区黑名单每次同步几百条，报了就是刷屏
+    new_ban:
+      enabled: true
+    # 硬盘坏道与老化。没有冗余，这类告警必须收到
+    disk:
+      enabled: true
+    # 采集器自身失败
+    collector:
+      enabled: true
+
+# 端口暴露审计
+ports:
+  # 可选。如果你用一个 iptables 脚本管理放行端口，且脚本里有形如
+  #     PORTS="22,80,443"
+  # 的一行，填它的路径，面板会据此区分端口是"内网可达"还是"仅本机"。
+  # 容器内宿主机根挂在 /hostfs 下。留空或文件不存在则跳过，不影响其他功能
+  homeguard_path: ""
+  # 确实对公网开放的端口，会被标红提示。反代或路由器映射出去的填这里
+  public_ports: []
+  # 端口 -> 名称。services 里配过的会自动认领，这里只补充剩下的
+  labels:
+    22: SSH
+    445: SMB
+    8770: Homelab 面板
+
+# 硬盘健康。重映射/待处理扇区一旦非零立刻标红，通电时长超过 warn_hours 标黄
+disks:
+  warn_hours: 35000      # 约 4 年
+
+# 容器操作
+actions:
+  enabled: true
+  # 除了代码里硬保护的 homelab-dashboard 和 crowdsec，还想保护谁填这里
+  protected_containers: []
+  log_lines: 200
+
+# 远程主机采集。通过 SSH 拉另一台机器的 CPU/内存/负载。
+# ssh_key 需在本机存在，且公钥已加入对方 authorized_keys
+remote_hosts: []
+  # - name: 树莓派
+  #   host: 192.168.1.100
+  #   port: 22
+  #   user: root
+  #   ssh_key: /root/.ssh/id_remote
+  #   # npu: 采集昇腾 NPU; basic: 只采 CPU/内存/负载
+  #   probes: [basic]

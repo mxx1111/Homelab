@@ -85,6 +85,8 @@ class LapiClient:
         ccfg = (cfg or {}).get("crowdsec") or {}
         self.url = ccfg.get("lapi_url", "http://127.0.0.1:8080").rstrip("/")
         self.cred_path = ccfg.get("credentials_file", DEFAULT_CREDENTIALS)
+        from . import demo as demo_mod
+        self.demo = demo_mod.enabled(cfg)
         extra = ccfg.get("protected_networks") or []
         self.protected = PROTECTED_NETS + [str(x) for x in extra]
         self._token = None
@@ -161,6 +163,17 @@ class LapiClient:
         target, scope = _validate_target(value, self.protected)
         delta, api_duration = _parse_duration(duration)
 
+        # 演示模式：校验照走（受保护网段依然封不了，这本身就是要展示的行为），
+        # 但落到内存沙盒而不是 LAPI
+        if self.demo:
+            from . import demo as demo_mod
+            demo_mod.ban(target, (reason or "").strip()[:200] or "演示模式手动封禁")
+            now = datetime.now(timezone.utc)
+            return {"ok": True, "ip": target, "scope": scope, "duration": duration,
+                    "duration_label": DURATIONS[duration],
+                    "until": (now + delta).isoformat(timespec="seconds"),
+                    "reason": (reason or "").strip()[:200] or "演示模式手动封禁"}
+
         now = datetime.now(timezone.utc)
         stamp = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         note = (reason or "").strip()[:200] or "面板手动封禁"
@@ -207,6 +220,10 @@ class LapiClient:
         target = (value or "").strip()
         if not target:
             raise FirewallError("请填写要解封的 IP")
+        if self.demo:
+            from . import demo as demo_mod
+            demo_mod.unban(target)
+            return {"ok": True, "ip": target, "removed": 1}
         try:
             ipaddress.ip_network(target, strict=False)
         except ValueError:
