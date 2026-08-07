@@ -89,9 +89,14 @@ def _client_ip(request: Request):
     """面板可能被反代，优先取 X-Forwarded-For 的第一跳"""
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        return xff.split(",")[0].strip()
-    return request.headers.get("x-real-ip") or (
-        request.client.host if request.client else "?")
+        ip = xff.split(",")[0].strip()
+    else:
+        ip = request.headers.get("x-real-ip") or (
+            request.client.host if request.client else "?")
+    # 演示实例是公开的，审计页人人可见。记完整 IP 等于把每个访客的地址
+    # 展示给所有其他访客——他们并没有同意这件事。掩掉后半段，
+    # 既能演示"审计能区分不同来源"，又不泄漏到个人
+    return demo.mask_ip(ip) if DEMO else ip
 
 
 @app.middleware("http")
@@ -144,7 +149,12 @@ def summary():
     snap["alerts"] = alert_engine.snapshot()
     snap["site_name"] = alert_engine.site_name
     if DEMO:
-        demo.SANDBOX.maybe_reset()
+        if demo.SANDBOX.maybe_reset():
+            # 告警规则存在 SQLite 里，不在内存沙盒中，得单独清
+            history.clear_setting("alert_rules")
+            history.clear_setting("muted")
+            alert_engine.reload_settings()
+            log.info("演示沙盒已重置")
         snap["demo"] = True
     return JSONResponse(snap)
 
@@ -218,6 +228,8 @@ def firewall_meta():
 def firewall_search(q: str = Query(..., min_length=1),
                     limit: int = Query(200, ge=1, le=1000)):
     """封禁列表没有全量下发给前端(社区黑名单上万条)，搜索直接查库"""
+    if DEMO:
+        return {"query": q, "items": demo.search(q, limit)}
     try:
         return {"query": q, "items": search_decisions(CONFIG, q, limit)}
     except Exception as exc:  # noqa: BLE001

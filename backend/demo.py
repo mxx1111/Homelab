@@ -15,6 +15,7 @@
 
 启用方式：环境变量 HOMELAB_DEMO=1，或 config.yaml 里 demo: true
 """
+import ipaddress
 import math
 import os
 import random
@@ -549,3 +550,43 @@ def seed_history(history):
             return len(rows)
     except Exception:  # noqa: BLE001  播种失败不该拖垮启动
         return 0
+
+
+def mask_ip(ip):
+    """把访客 IP 掩掉后半段。演示站的审计页所有人可见，
+    完整地址不该出现在那里。
+
+    走 ipaddress 解析而不是切字符串：反代可能把 IPv4 传成
+    ::ffff:1.2.3.4 这种映射形式，按冒号切会掩出一个毫无意义的结果。
+    """
+    raw = (ip or "").strip()
+    if not raw or raw == "?":
+        return "?"
+    try:
+        addr = ipaddress.ip_address(raw)
+    except ValueError:
+        return "?"
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if addr.version == 4:
+        a, b, _, _ = str(addr).split(".")
+        return f"{a}.{b}.x.x"
+    groups = addr.exploded.split(":")
+    return ":".join(groups[:2]) + "::x"
+
+
+def search(query, limit=200):
+    """演示模式的封禁搜索。真实实现直接查 CrowdSec 库，
+    演示容器里没有那个库，改为在仿真数据里过滤"""
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    out = []
+    for d in _bans():
+        haystack = " ".join(str(d.get(k) or "") for k in
+                            ("ip", "reason", "as_name", "as_label", "country", "origin"))
+        if q in haystack.lower():
+            out.append(d)
+            if len(out) >= limit:
+                break
+    return out
