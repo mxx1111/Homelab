@@ -10,8 +10,9 @@
 **简体中文** · [English](README.en.md)
 
 安全告警、存储容量、服务健康、主机负载、网络速率、证书到期、端口暴露面、
-实时连接、Docker 容器、硬盘 SMART —— 十二个采集器汇成一页。不只是看：
+实时连接、Docker 容器、硬盘 SMART —— 十三个采集器汇成一页。不只是看：
 可以一键封禁 IP、重启容器、按趋势预测磁盘写满时间，异常时主动推到手机。
+也能[管理多台机器](#管理多台机器)：在一处封禁，全部节点同时生效。
 
 前端零构建、零依赖，图表是手写 SVG，整个前端就三个文件。
 
@@ -30,12 +31,13 @@
   - [第二步：装防火墙 bouncer](#第二步装防火墙-bouncer)
   - [第三步：告诉 CrowdSec 读哪些日志](#第三步告诉-crowdsec-读哪些日志)
   - [第四步：部署面板](#第四步部署面板)
-  - [第五步：打开写操作](#第五步打开写操作)
+  - [第五步：设置登录](#第五步设置登录)
 - [配置详解](#配置详解)
 - [容器权限说明](#容器权限说明)
 - [安全须知](#安全须知)
 - [功能详解](#功能详解)
 - [从本机部署到远程主机](#从本机部署到远程主机)
+- [管理多台机器](#管理多台机器)
 - [外部看门狗](#外部看门狗)
 - [故障排查](#故障排查)
 - [架构](#架构)
@@ -69,9 +71,10 @@ Grafana 强在时序曲线和多数据源，弱在「一屏卡片式概览」，
 
 ### 不适合谁
 
-- 多机集群 —— 这是单机面板，只有一个只读的远程主机采集器
+- 大规模集群 —— 能管几台到十几台（见[管理多台机器](#管理多台机器)），
+  再多就该上 Prometheus + Ansible 那套了
 - 需要长期高精度指标 —— 历史库是分钟级采样，Prometheus 更合适
-- 需要多用户和权限体系 —— 它没有登录，见[安全须知](#安全须知)
+- 需要多用户和权限体系 —— 登录是单用户的，没有 RBAC，也不打算做
 
 ---
 
@@ -79,7 +82,7 @@ Grafana 强在时序曲线和多数据源，弱在「一屏卡片式概览」，
 
 | 页签 | 内容 |
 |---|---|
-| **总览** | 安全态势、存储、主机负载、网络、服务健康、端口暴露、容器、硬盘、证书 |
+| **总览** | 安全态势、被管理节点、存储、主机负载、网络、服务健康、端口暴露、容器、硬盘、证书 |
 | **防火墙** | 封禁列表（手动/自动检出/社区黑名单三类）、攻击来源 TOP、国家与 ASN 分布、白名单、一键封禁与解封 |
 | **连接** | 此刻谁连着你，含 GeoIP 归属、连接状态中文化、按服务端口聚合 |
 | **端口** | 全部监听端口，按「公网暴露 / 内网可达 / 仅本机」分级 |
@@ -87,8 +90,8 @@ Grafana 强在时序曲线和多数据源，弱在「一屏卡片式概览」，
 | **容器** | 启停重启、日志查看、保护名单、btrfs 快照清理命令生成 |
 | **设置** | 告警规则页面化编辑、单条告警忽略、推送开关 |
 
-十二个采集器：`host` `network` `containers` `services` `crowdsec` `storage`
-`certs` `remote` `ports` `connections` `engine` `disks`。
+十三个采集器：`host` `network` `containers` `services` `crowdsec` `storage`
+`certs` `remote` `nodes` `ports` `connections` `engine` `disks`。
 每个独立循环、独立失败，某一个挂掉不影响其他卡片。
 
 > 想直接看效果：**<https://homelab.88688.team>**。也欢迎提交你自己的部署截图到
@@ -297,37 +300,54 @@ docker logs -f homelab-dashboard
 
 ---
 
-### 第五步：打开写操作
+### 第五步：设置登录
 
 面板出厂状态下**所有写操作都是拒绝的**——封禁、解封、重启容器、改告警规则
-全部返回 403。因为它能改防火墙、能操作容器，自己却没有登录体系。
+全部返回 403。因为它能改防火墙、能操作容器。
 
-打开的方式二选一：
-
-**方式 A：设置操作令牌（推荐）**
+**推荐：开登录**
 
 ```yaml
 # config.yaml
-firewall:
-  write_token: "换成一串随机字符"
+auth:
+  enabled: true
+  username: admin
+  password: "你的密码"
 ```
 
-生成一串：
+登录之后写操作自动放行，不用再配令牌。会话默认 7 天，同一 IP 连错 5 次锁
+15 分钟。
+
+密码可以直接写明文，也可以填散列——`config.yaml` 常会被 `cat` 出来贴到
+issue 里排查问题，散列贴出去不算泄漏：
 
 ```bash
-openssl rand -hex 24
+docker exec homelab-dashboard python -m backend.hashpw '你的密码'
+# 把输出那行整串填进 auth.password
 ```
 
-前端会多出一个令牌输入框，填一次会记在浏览器 localStorage 里。
+**多机部署时这一步不是可选的。** 接入多个节点后，同一个页面能操作全部机器的
+防火墙、还持有各节点的 SSH 密钥——无认证等于把整套基础设施挂在网上。
 
-**方式 B：完全信任所在网络**
+**补充：操作令牌（给脚本用）**
+
+```yaml
+firewall:
+  write_token: "换成一串随机字符"    # openssl rand -hex 24
+```
+
+配了之后，带 `X-Panel-Token` 头的请求不需要登录也能写。用途是脚本调用——
+curl 一条命令封个 IP，不必先走登录换 cookie。前端也会多出一个令牌输入框，
+填一次记在 localStorage 里。
+
+**兜底：完全信任所在网络**
 
 ```yaml
 firewall:
   allow_anonymous_write: true
 ```
 
-只有当面板确实只能从内网或 VPN 访问时才这么做。
+只有当面板确实只能从内网或 VPN 访问、且你不打算接多节点时才这么做。
 
 改完重启容器：
 
@@ -424,28 +444,34 @@ iptables。所有写操作必须走 LAPI。
 
 ## 安全须知
 
-**这个面板没有登录体系。** 它把整台机器的状态聚合在一页——服务清单、端口
-暴露面、容器列表、内网拓扑——对攻击者而言这是最理想的情报源。加上它还能
-改防火墙和操作容器，一旦暴露到公网就是灾难。
+**这个面板把整台机器的状态聚合在一页**——服务清单、端口暴露面、容器列表、
+内网拓扑——对攻击者而言这是最理想的情报源。加上它还能改防火墙和操作容器，
+配置不当直接暴露到公网就是灾难。
 
 设计上的取舍：
 
-1. **写操作默认拒绝。** 未配置 `write_token` 时，所有写接口返回 403。
-   要么配令牌，要么显式声明 `allow_anonymous_write: true`。
-2. **受保护网段不可封禁。** 内网段（`10/8`、`172.16/12`、`192.168/16`）、
+1. **写操作默认拒绝。** 没开登录也没配 `write_token` 时，所有写接口返回 403。
+   要么开登录，要么配令牌，要么显式声明 `allow_anonymous_write: true`。
+2. **登录是单用户的。** 用户名密码 + 内存 session + 失败限速，没有 RBAC、
+   没有多用户、没有找回密码。单人自建场景下那些只会变成需要维护的攻击面。
+   session 存内存，面板重启即失效——代价是重新登录一次，换来不必持久化
+   会话密钥。
+3. **受保护网段不可封禁。** 内网段（`10/8`、`172.16/12`、`192.168/16`）、
    回环、Tailscale CGNAT 段（`100.64/10`）在代码里硬保护，防止手滑把自己
    关在门外。可在 `crowdsec.protected_networks` 追加。
-3. **快照只生成命令不执行删除。** 卷是只读挂载，面板给你一条命令，
-   自己复制到宿主机执行。在没有认证的前提下，给它删数据的权限不划算。
-4. **审计只记写操作。** 面板每 5 秒轮询一次，GET 全记下来一天几万条，
+4. **快照只生成命令不执行删除。** 卷是只读挂载，面板给你一条命令，
+   自己复制到宿主机执行。给一个网页删数据的权限，收益不匹配风险。
+5. **审计只记写操作。** 面板每 5 秒轮询一次，GET 全记下来一天几万条，
    有用的写操作反而被埋掉。首页访问按 IP 每小时记一条。
 
 **推荐的部署方式**
 
 - 只监听内网，用防火墙限制来源网段
 - 需要外网访问就走 Tailscale / WireGuard / Zerotier，**不要做端口映射**
-- 真要放公网，前面加一层带认证的反向代理（Authelia、Cloudflare Access 等），
-  别只靠 `write_token`
+- 真要放公网，除了开登录，前面再加一层带认证的反向代理
+  （Authelia、Cloudflare Access 等）
+- **接了多节点就必须开登录**——那时这个页面能操作全部机器的防火墙，
+  还持有各节点的 SSH 密钥
 
 **发现漏洞**请见 [SECURITY.md](SECURITY.md)。
 
@@ -554,6 +580,170 @@ cp deploy.env.example .deploy.env
 
 ---
 
+## 管理多台机器
+
+一个面板看全部机器、在一处封禁 IP 并对所有机器生效。
+
+这件事分成两半，而且**两半是独立的**——只做防火墙那半也完全可用：
+
+| | 靠什么 | 要做什么 |
+|---|---|---|
+| 防火墙统一 | CrowdSec 原生的分布式架构 | 改几行配置，不用装东西 |
+| 状态聚合 | 面板通过 SSH 拉取 | 节点上放一个采集脚本 |
+
+### 先说网络：把安全分档
+
+节点的 agent 要连到中央 LAPI，中央 LAPI 在哪台就得让别人连得进来。
+按安全性从高到低：
+
+1. **私有网络（推荐）** — WireGuard / Tailscale / ZeroTier / 内网。
+   LAPI 只监听私有网段，公网上根本不存在这个端口，也就没有"白名单配错了
+   会怎样"这个问题
+2. **公网 + 反代 + 强认证（可接受）** — HTTPS 反代 + 源 IP 白名单 +
+   CrowdSec 自带的 machine 认证。三层都要，缺一层就降一档
+3. **直接把 8080 暴露到公网（不要）** — CrowdSec 的 machine 认证是
+   login/password，明文 HTTP 传输，等于把凭据广播出去
+
+下面的例子用 `10.0.0.1` 代表中央机器在私有网络里的地址，换成你自己的。
+
+### 防火墙统一
+
+**中央机器**（跑 LAPI 的那台）让 LAPI 监听得到：
+
+```yaml
+# /etc/crowdsec/config.yaml
+api:
+  server:
+    listen_uri: 0.0.0.0:8080
+```
+
+绑 `0.0.0.0` 而不是直接绑私有网络地址，是因为后者会让 crowdsec 的启动
+依赖 VPN 先就绪——VPN 没起来 crowdsec 直接启动失败，本机防护跟着一起挂。
+绑 `0.0.0.0` 然后用防火墙限制来源，暴露面一样，但没有启动顺序依赖：
+
+```bash
+# 只放行私有网络和本机，其余一律拒绝
+iptables -A INPUT -i lo -p tcp --dport 8080 -j ACCEPT
+iptables -A INPUT -s 10.0.0.0/24 -p tcp --dport 8080 -j ACCEPT
+iptables -A INPUT -p tcp --dport 8080 -j DROP
+```
+
+**每个节点**上（顺序有讲究，先注册确认通了再关本地 LAPI，中间不留失防窗口）：
+
+```bash
+# 1. 装 CrowdSec（同前面的第一步）
+curl -s https://install.crowdsec.net | sudo sh
+sudo apt-get install -y crowdsec
+
+# 2. 注册到中央。这一步会覆盖 local_api_credentials.yaml，先备份
+sudo cp /etc/crowdsec/local_api_credentials.yaml{,.bak}
+sudo cscli lapi register --machine node1 --url http://10.0.0.1:8080
+
+# 3. 【在中央机器上】批准
+sudo cscli machines validate node1
+
+# 4. 关掉本机 LAPI —— 在 api.server 下加 enable: false
+#    注意配置文件里默认没有这个字段（默认是 true），是"加"不是"改"
+sudo systemctl restart crowdsec
+
+# 5. bouncer —— 装完必须马上配，本地 LAPI 已经关了，它这时是断的
+sudo apt-get install -y crowdsec-firewall-bouncer-iptables
+#    【在中央机器上】cscli bouncers add node1-fw -o raw   拿到 key
+sudo vi /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+#    api_url: http://10.0.0.1:8080/
+#    api_key: <上一步的 key>
+sudo systemctl restart crowdsec-firewall-bouncer
+```
+
+验收：中央 `cscli machines list` 看到所有节点且心跳在跳，然后封一个 IP，
+到另一台确认规则真的落地了：
+
+```bash
+# ipset 名字带分片后缀（-0/-1/-2），直接查 crowdsec-blacklists 会报
+# "set does not exist"，很容易误判成没生效
+for s in $(ipset list -n | grep '^crowdsec-blacklists'); do
+  ipset test $s 1.2.3.4 2>/dev/null && echo "命中 $s"
+done
+```
+
+做完这一步，面板上就能看到全部节点的告警了——**面板不用改任何配置**。
+因为它读的是中央那台的 CrowdSec 数据库，而所有节点的告警都写进了同一个库。
+封禁列表会多出一列"检出机器"。
+
+### 状态聚合（容器、磁盘、端口）
+
+CrowdSec 管不到的部分靠 SSH 拉。**关键是用受限密钥**——面板持有所有节点的
+私钥，它一旦泄漏，有强制命令保护的话攻击者只能读监控数据，没有的话等于
+拿到全部节点的 shell。
+
+**中央机器**上生成一把专用密钥：
+
+```bash
+mkdir -p /opt/homelab-dashboard/secrets && chmod 700 $_
+ssh-keygen -t ed25519 -N "" -C "homelab-panel" \
+  -f /opt/homelab-dashboard/secrets/id_panel
+```
+
+挂进容器（`docker-compose.override.yml`）：
+
+```yaml
+services:
+  homelab-dashboard:
+    volumes:
+      - ./secrets:/app/secrets:ro
+```
+
+**每个节点**上装采集脚本，并给公钥套上强制命令：
+
+```bash
+sudo mkdir -p /opt/homelab
+sudo install -m 755 scripts/node-collect.sh /opt/homelab/node-collect.sh
+
+# authorized_keys 里加这一行（公钥换成上面生成的那把）
+command="/opt/homelab/node-collect.sh",restrict ssh-ed25519 AAAA... homelab-panel
+```
+
+`restrict` 是 OpenSSH 7.2+ 的简写，等于关掉端口转发、agent 转发、
+X11、pty 和 user-rc。加上 `command=` 之后，这把钥匙**只能**跑那一个脚本。
+验证一下：
+
+```bash
+ssh -i secrets/id_panel root@10.0.0.2 "cat /etc/shadow"
+# 应该返回采集脚本的输出，而不是 /etc/shadow 的内容
+```
+
+最后在面板配置里列出节点：
+
+```yaml
+nodes:
+  - name: node1
+    host: root@10.0.0.2
+    key: /app/secrets/id_panel
+  - name: node2
+    host: root@10.0.0.3
+    port: 4522              # 非标准 SSH 端口
+    key: /app/secrets/id_panel
+
+intervals:
+  nodes: 60
+```
+
+总览页会多出一张「节点」卡片：每台一行，负载、内存、最满的那块盘、
+容器数、本机实际拦截数、采集延迟，点一行展开细节。
+
+配置里只写 SSH 目标，**不绑定任何具体网络方案**——你走 VPN、内网还是公网，
+面板不需要知道。
+
+### 已知边界
+
+- **节点采集是只读的**。面板不会去节点上执行任何操作，受限密钥也不允许。
+  跨机器的操作只有封禁，那是 CrowdSec 自己下发的
+- **各页签仍然显示中央机器的数据**。节点的证书、连接、网络速率没有采集——
+  采了也是零散的，不如把这些留在节点自己的面板上
+- **历史曲线只有中央机器的**。各节点存自己的，中央只聚合当前状态
+
+---
+
 ## 外部看门狗
 
 告警引擎跑在被监控的机器上，**那台机器一挂，告警也跟着哑火**——最该报警的
@@ -640,7 +830,9 @@ CrowdSec 没检测到东西，通常是日志源没配对。跑 `sudo cscli metr
 
 ```
 backend/
-  main.py            FastAPI 路由与审计中间件
+  main.py            FastAPI 路由、认证与审计中间件
+  auth.py            单用户登录：会话、口令散列、失败限速
+  hashpw.py          生成口令散列的命令行工具
   cache.py           采集调度与内存缓存
   config.py          配置加载
   alerts.py          告警规则引擎、覆盖层、静音
@@ -648,14 +840,17 @@ backend/
   history.py         SQLite：metrics/events/whitelist/audit/settings
   notify.py          Server 酱
   actions.py         容器操作与快照
-  asn_names.py       ISP 名称本地化
-  collectors/        12 个采集器
+  asn_names.py       ISP 名称与国家代码本地化
+  scenario_names.py  CrowdSec 场景名中文化
+  demo.py            演示模式的仿真采集器与写操作沙盒
+  collectors/        13 个采集器
 frontend/
   index.html         页面骨架
   app.css            样式
   app.js             渲染与交互（零依赖）
 scripts/
   watchdog.sh        外部看门狗
+  node-collect.sh    装在被管理节点上的采集脚本
 ```
 
 ### API
@@ -698,12 +893,15 @@ python run.py
 
 已完成：历史数据落 SQLite、存储增长预测、网络与负载曲线、攻击来源聚合与
 一键封禁、容器重启与日志、Server 酱告警推送、外部看门狗、端口暴露审计、
-访问审计、告警规则页面化、硬盘 SMART 监控、ISP 名称本地化。
+访问审计、告警规则页面化、硬盘 SMART 监控、ISP 名称与场景名本地化、
+面板登录、多机管理（CrowdSec 多节点 + SSH 受限密钥状态采集）。
 
 还没做：
 
 - 容器资源排行的详情页 —— 点开看单个容器的历史占用
-- 快照真删除 —— 现在只生成命令，要做得先给面板加认证
+- 快照真删除 —— 现在只生成命令。有了登录之后这件事可做了，
+  但删数据的权限还是想再想想
+- 节点的历史曲线 —— 现在只聚合当前状态，各节点的时序数据留在各自机器上
 - 多语言界面 —— 目前界面是中文，欢迎 PR
 - 手机端布局再打磨 —— 目前能用，表格横向滚动略挤
 
