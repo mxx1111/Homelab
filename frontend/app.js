@@ -340,17 +340,50 @@ function renderNetwork(sec, series) {
 function renderCerts(sec) {
   const d = sec?.data;
   if (!d?.items) return fail(sec, "证书");
-  const rows = d.items.map(c => {
-    if (!c.ok) return `<div class="row"><span class="k"><span>${esc(c.target)}</span></span>
-      <span class="v dim">${esc(c.error)}</span></div>`;
+
+  // 按剩余天数升序：域名一多，配置顺序就没意义了，最紧急的必须在最上面。
+  // 读不到的排最前——那是比"快过期"更需要立刻看的状态
+  const items = [...d.items].sort((a, b) =>
+    (a.ok ? (a.days_left ?? 9999) : -1) - (b.ok ? (b.days_left ?? 9999) : -1));
+  const urgent = items.filter(c => !c.ok || c.level === "crit" || c.level === "warn");
+  const calm = items.filter(c => c.ok && c.level === "ok");
+  // 异常的全列，正常的补到 7 行为止，剩下的收成一句话
+  const show = urgent.concat(calm.slice(0, Math.max(0, 7 - urgent.length)));
+  const hidden = items.length - show.length;
+
+  const rows = show.map(c => {
+    // 显示配置里的目标域名而不是证书 subject：换成通配符之后，
+    // 十几个站点的 subject 全是 *.16888.team，光看它分不清是哪个
+    const name = String(c.target || "").replace(/:443$/, "");
+    if (!c.ok) return `<div class="row">
+      <span class="k"><span>${esc(name)}</span></span>
+      <span class="v"><span class="tag crit">读不到</span></span></div>`;
     const cls = c.level === "crit" ? "crit" : c.level === "warn" ? "warn" : "ok";
-    return `<div class="row">
-      <span class="k"><span>${esc(c.subject || c.target)}</span>
+    return `<div class="row" title="${esc(c.subject || "")}　${esc(c.expires_at || "")}">
+      <span class="k"><span>${esc(name)}</span>
         ${c.chain_valid ? "" : '<span class="tag warn">链不完整</span>'}</span>
       <span class="v"><span class="tag ${cls}">${c.days_left} 天</span></span>
     </div>`;
   }).join("");
-  return card("证书到期", d.level === "crit" ? "crit" : d.level === "warn" ? "warn" : "ok", rows);
+
+  const bad = items.filter(c => !c.ok).length;
+  const crit = items.filter(c => c.ok && c.level === "crit").length;
+  const warn = items.filter(c => c.ok && c.level === "warn").length;
+  const head = `<div class="stats">
+    <div class="stat"><div class="n">${items.length}</div><div class="l">监控中</div></div>
+    ${warn ? `<div class="stat"><div class="n" style="color:var(--warn)">${warn}</div>
+      <div class="l">30 天内</div></div>` : ""}
+    ${crit ? `<div class="stat"><div class="n" style="color:var(--crit)">${crit}</div>
+      <div class="l">7 天内</div></div>` : ""}
+    ${bad ? `<div class="stat"><div class="n" style="color:var(--crit)">${bad}</div>
+      <div class="l">读不到</div></div>` : ""}
+  </div>`;
+  const tail = hidden > 0
+    ? `<div class="note">其余 ${hidden} 张均在 ${calm[Math.max(0, 7 - urgent.length) - 1]?.days_left ?? 30} 天以上</div>`
+    : "";
+  return card("证书到期",
+    d.level === "crit" ? "crit" : d.level === "warn" ? "warn" : "ok",
+    head + rows + tail);
 }
 
 function renderPortsCard(sec) {
