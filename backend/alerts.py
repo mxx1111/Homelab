@@ -11,6 +11,9 @@
 import logging
 import time
 
+from .asn_names import country_cn, pretty_as
+from .scenario_names import scenario_cn
+
 log = logging.getLogger("homelab.alerts")
 
 LEVEL_TEXT = {"warn": "警告", "crit": "严重", "info": "提示"}
@@ -36,6 +39,58 @@ RULE_SCHEMA = [
      "fields": []},
 ]
 SCHEMA_BY_KEY = {r["key"]: r for r in RULE_SCHEMA}
+
+
+def _fmt_left(seconds):
+    if seconds is None:
+        return ""
+    if seconds <= 0:
+        return "即将到期"
+    d, rem = divmod(int(seconds), 86400)
+    if d > 365:
+        return "永久"
+    h, m = divmod(rem, 3600)
+    m //= 60
+    if d:
+        return f"{d} 天 {h} 小时" if h else f"{d} 天"
+    if h:
+        return f"{h} 小时 {m} 分" if m else f"{h} 小时"
+    return f"{m} 分" if m else "不到 1 分钟"
+
+
+def _ban_message(ban, nodes):
+    """封禁通知的标题和正文。
+
+    这条推送是在手机上瞄一眼的，所以每个字段都翻成中文、每行一个事实：
+    哪台机器发现的、什么攻击、IP 是谁家的、封多久、影响哪几台。
+    英文原名附在括号里——真要去查 CrowdSec 文档或 whois 时还得靠它。
+    """
+    ip = ban.get("ip") or "?"
+    machine = ban.get("machine")
+    scenario = ban.get("reason") or ""
+    cn = scenario_cn(scenario)
+
+    title = f"{machine} 检出封禁 {ip}" if machine else f"新封禁 {ip}"
+
+    lines = [f"IP：{ip}"]
+    if machine:
+        lines.append(f"检出机器：{machine}")
+    if cn:
+        raw = scenario.split("/")[-1]
+        lines.append(f"攻击类型：{cn}" + (f"（{raw}）" if raw and raw != cn else ""))
+    where = " · ".join(filter(None, [
+        country_cn(ban.get("country")),
+        pretty_as(ban.get("as_name")) if ban.get("as_name") else "",
+    ]))
+    if where:
+        lines.append(f"IP 归属：{where}")
+    left = _fmt_left(ban.get("expires_in"))
+    if left:
+        lines.append(f"封禁剩余：{left}")
+    # 多机时说清楚这条封禁不只作用在检出的那台上，否则容易误以为其他机器还敞着
+    if len(nodes) > 1:
+        lines.append(f"生效范围：全部 {len(nodes)} 个节点（{'、'.join(nodes)}）")
+    return title, "\n".join(lines)
 
 
 class AlertEngine:
@@ -279,13 +334,14 @@ class AlertEngine:
             if state.get("alerted_at"):
                 self._fire(key, "info", f"已恢复: {state['title']}", "", recovered=True)
 
+        nodes = [n.get("name") for n in
+                 (((sections.get("crowdsec") or {}).get("data") or {}).get("nodes") or [])
+                 if n.get("name")]
         for ban in self._new_bans(sections):
             if self.is_muted(f"ban:{ban['ip']}"):
                 continue
-            where = " ".join(filter(None, [ban.get("country"), ban.get("as_name")]))
-            self._fire(f"ban:{ban['ip']}", "warn", f"新封禁 {ban['ip']}",
-                       f"{(ban.get('reason') or '').split('/')[-1]}"
-                       f"{'  ' + where if where else ''}", kind="ban")
+            title, detail = _ban_message(ban, nodes)
+            self._fire(f"ban:{ban['ip']}", "warn", title, detail, kind="ban")
 
     def _fire(self, key, level, title, detail, kind="alert",
               recovered=False, repeat=False):
