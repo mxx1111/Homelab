@@ -184,6 +184,22 @@ nav .badge.warn{background:var(--warn)}
 .tag.crit{background:var(--crit-soft); color:var(--crit); border-color:transparent}
 .tag.accent{background:var(--accent-soft); color:var(--accent); border-color:transparent}
 
+/* 机器名标签。同一台机器在告警列表、封禁列表、攻击来源、节点卡片里都用
+   同一个色，扫一眼就能把行按机器归类——只靠文字的话，多机场景下要逐行读。
+   颜色由名字 hash 而来，加机器不用改代码；四个色调是刻意的上限，
+   再多就分不清了，而且这个面板本来也不是为几十台机器设计的 */
+.tag.mch{font-weight:600; border-color:transparent}
+.tag.m0{background:rgba(122,154,101,.16); color:#5F7D4B}
+.tag.m1{background:rgba(90,141,176,.16);  color:#3F7196}
+.tag.m2{background:rgba(168,116,180,.16); color:#8A5A9B}
+.tag.m3{background:rgba(193,133,42,.16);  color:#9A6816}
+@media (prefers-color-scheme:dark){
+  .tag.m0{background:rgba(143,174,121,.20); color:#A5C48D}
+  .tag.m1{background:rgba(110,164,201,.20); color:#8FBEDC}
+  .tag.m2{background:rgba(190,140,201,.20); color:#CFA6DA}
+  .tag.m3{background:rgba(209,155,68,.20);  color:#E0B978}
+}
+
 .mono{font-family:var(--mono); font-size:12.5px}
 .empty{color:var(--faint); font-size:13px; padding:22px 0; text-align:center}
 .note{color:var(--faint); font-size:11.5px; margin-top:10px; line-height:1.5}
@@ -344,6 +360,59 @@ select{cursor:pointer; appearance:none; padding-right:30px;
             border-bottom:1px solid var(--border)}
 .modal-head h3{font:500 16px/1 var(--serif)}
 .modal-head .sp{margin-left:auto}
+
+/* ---------- 节点网格 ----------
+   每台机器一个格子。auto-fit + minmax 让它自己决定排几列：
+   宽屏三四台并排，手机自动单列，不用写一堆断点 */
+.nodegrid{display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(232px,1fr))}
+.nodebox{
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:12px 13px 11px; background:var(--card-alt); cursor:pointer;
+  transition:border-color .16s, background .16s;
+}
+.nodebox:hover{border-color:var(--border-strong)}
+.nodebox.on{border-color:var(--accent); background:var(--card)}
+/* 离线的格子不给点击手势——展开也没内容 */
+.nodebox.off{cursor:default; opacity:.75}
+
+.nodehead{display:flex; align-items:center; gap:7px; margin-bottom:10px}
+.nodehost{font:12px/1 var(--mono); color:var(--faint); overflow:hidden;
+          text-overflow:ellipsis; white-space:nowrap}
+.nodelat{margin-left:auto; font-size:11px; color:var(--faint);
+         font-variant-numeric:tabular-nums; flex:none}
+.nodealert{font-size:11.5px; color:var(--crit); background:var(--crit-soft);
+           border-radius:5px; padding:4px 7px; margin-bottom:9px}
+
+.nodemetrics{display:flex; flex-direction:column; gap:9px}
+.nm .nmk{display:flex; justify-content:space-between; align-items:baseline;
+         font-size:11.5px; color:var(--dim); gap:8px}
+.nm .nmk > span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.nm .nmk b{font:500 12.5px/1 var(--sans); color:var(--text); flex:none;
+           font-variant-numeric:tabular-nums}
+.nm .bar{margin:4px 0 0}
+.nmx{font-size:10.5px; color:var(--faint); margin-top:3px; line-height:1.45}
+
+.nodefoot{
+  display:flex; flex-wrap:wrap; gap:3px 11px; margin-top:11px; padding-top:9px;
+  border-top:1px solid var(--border); font-size:11px; color:var(--dim);
+}
+.nodefoot b{font-weight:600; color:var(--text); font-variant-numeric:tabular-nums}
+.nodefoot .dim{color:var(--faint); margin-left:auto}
+.nodedetail{margin-top:11px; padding-top:10px; border-top:1px solid var(--border)}
+.tagwrap{display:flex; flex-wrap:wrap; gap:4px}
+
+/* 登录框复用 .modal 的遮罩，只把盒子改窄 */
+.modal-box.login{
+  width:min(340px,100%); padding:26px 24px 24px; gap:11px;
+  align-items:stretch; max-height:none;
+}
+.modal-box.login h3{font:500 20px/1.2 var(--serif); margin-bottom:2px}
+.modal-box.login input{width:100%}
+.modal-box.login .btn{margin-top:3px; justify-content:center; text-align:center}
+.modal-box.login .err{
+  font-size:12.5px; color:var(--crit); background:var(--crit-soft);
+  border-radius:var(--radius-sm); padding:8px 10px;
+}
 .logbox{
   flex:1; overflow:auto; padding:14px 19px; margin:0;
   font:12px/1.65 var(--mono); white-space:pre-wrap; word-break:break-all;
@@ -378,6 +447,18 @@ select{cursor:pointer; appearance:none; padding-right:30px;
    表格列多，手机上横向滚动很难用。标了 .opt 的是次要列，窄屏直接不显示，
    留下的都是一眼要看的和能点的。比把表格改成卡片式改动小得多，效果够用 */
 @media (max-width:640px){
+  /* 防护节点那行右边挂着"检测/拦截"两个状态，和左边的名字挤在一起。
+     改成上下两行：名字在上，状态在下。总览的节点格子是 grid，
+     minmax 已经会自动单列，不用管 */
+  .nodeLine{flex-direction:column; align-items:stretch; gap:6px}
+  .nodeLine .v{
+    white-space:normal !important; text-align:left;
+    display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px;
+  }
+  .nodeLine .v > span{margin-left:0 !important}
+  /* 手机上格子占满宽度，别为了并排把内容压窄 */
+  .nodegrid{grid-template-columns:1fr; gap:10px}
+
   .tbl .opt, .tbl th.opt{display:none}
   .tbl th{padding-right:8px; font-size:10px}
   .tbl td{padding-right:8px; font-size:12.5px}
