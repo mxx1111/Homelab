@@ -798,14 +798,32 @@ The config names an SSH target and nothing else — **no networking scheme is
 baked in**. Whether you reach nodes over VPN, LAN or the public internet is not
 the dashboard's business.
 
+### Switching to a node
+
+Once nodes are configured, a picker appears at the top right. Switch to a node
+and the tabs show that machine's data; the header gets an orange bar so you
+know you're not looking at the local machine — mistaking machine B's data for
+machine A's is the single easiest mistake to make here.
+
+| Tab | In node view |
+|---|---|
+| Overview | Host, storage, containers, ports, local enforcement, services |
+| Firewall | Attack sources and country breakdown for that machine. **The ban list is not filtered** — decisions come from the central LAPI and every one applies to all nodes |
+| Ports | Full listening inventory |
+| Containers | Read-only list, see below |
+| Connections / History / Settings | Explained as not applicable |
+
 ### Known boundaries
 
 - **Node collection is read-only.** The dashboard never executes anything on a
-  node, and the restricted key wouldn't let it. The only cross-machine action is
-  banning, and CrowdSec does that itself.
-- **Tabs still show the central machine.** Certificates, connections and network
-  throughput aren't collected per node — partial data there would be worse than
-  none, and each node can run its own dashboard if you want the detail.
+  node, and the restricted key wouldn't let it. So containers can't be
+  started or stopped in node view — supporting that means issuing a second key
+  bound to an action script, which erodes what the restricted key buys you.
+  Whether that trade is worth it depends on how much you need the feature.
+- **Nodes collect less than the local machine**: network throughput, live
+  connections, certificate expiry and drive SMART are missing. Throughput needs
+  continuous sampling to compute a delta; SMART needs root reading the device
+  directly. Add what you need to `scripts/node-collect.sh`.
 - **History is central-only.** Each node keeps its own; the central machine
   aggregates current state, not time series.
 

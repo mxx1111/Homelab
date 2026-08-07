@@ -75,7 +75,20 @@ nav .badge{font-size:10px; font-weight:600; padding:1px 5px; border-radius:9px;
            background:var(--crit); color:#fff; line-height:1.5}
 nav .badge.warn{background:var(--warn)}
 
-.status{margin-left:auto; display:flex; align-items:center; gap:8px;
+/* 节点切换器。放在状态指示前面，靠 margin-left:auto 顶到右侧 */
+.nodepick{
+  margin-left:auto; font-size:12.5px; padding:7px 30px 7px 11px;
+  background-color:var(--card-alt); border-color:var(--border-strong);
+  max-width:190px;
+}
+/* 切到节点视图时给顶栏一条色带。多机场景下最容易犯的错是看着 B 机器的
+   数据以为是 A 的，一条持续可见的提示比任何文案都管用 */
+body.nodeview header{box-shadow:inset 0 3px 0 var(--accent)}
+body.nodeview .nodepick{border-color:var(--accent); color:var(--accent); font-weight:500}
+
+/* 切换器隐藏时（单机部署）由状态栏接管靠右 */
+.nodepick.hide ~ .status{margin-left:auto}
+.status{display:flex; align-items:center; gap:8px;
         font-size:12.5px; color:var(--faint); font-variant-numeric:tabular-nums}
 .pulse{width:6px; height:6px; border-radius:50%; background:var(--ok);
        animation:breathe 2.4s ease-in-out infinite}
@@ -127,7 +140,10 @@ nav .badge.warn{background:var(--warn)}
   body{padding:0 14px 48px}
   header{gap:14px; margin:0 -14px 16px; padding:16px 14px 12px}
   header.scrolled{padding:10px 14px 9px}
-  .status{width:100%; margin-left:0}
+  /* 窄屏切换器和状态同占一行，别各占一行把顶栏撑高 */
+  .nodepick{margin-left:0; flex:1 1 130px; max-width:none}
+  .status{flex:2 1 auto; margin-left:0; width:auto}
+  .nodepick.hide ~ .status{width:100%; margin-left:0}
   nav{width:100%}
   nav button{flex:1; justify-content:center; padding:8px 10px}
 }

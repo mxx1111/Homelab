@@ -22,6 +22,8 @@
       <button data-tab="containers">容器</button>
       <button data-tab="settings">设置</button>
     </nav>
+    <!-- 节点切换。只在配了节点时出现，单机部署看不到这个控件 -->
+    <select id="nodePick" class="nodepick hide" title="切换查看的机器"></select>
     <div class="status"><span class="pulse" id="pulse"></span><span id="updated">连接中…</span></div>
   </header>
 
@@ -219,6 +221,10 @@
     </div>
   </div>
 </div>
+
+<!-- 节点视图下不适用的页签显示这个，而不是覆盖页签自身的 innerHTML——
+     那样会毁掉 #history 等页签里的静态结构，切回本机时就填不回数据了 -->
+<div id="nodeNotice" class="grid hide"></div>
 
 <div id="toasts"></div>
 <div id="modal"></div>

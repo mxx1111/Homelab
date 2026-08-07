@@ -645,6 +645,182 @@ function nodeDetail(n) {
   </div>`;
 }
 
+/* ---------- 节点视图 ----------
+   数据来自 nodes 采集器，粒度比本机粗：没有网络速率、连接、证书、SMART。
+   缺的部分明确说出来，不拿本机数据顶替——那会让人误判。 */
+
+function nodeCard(n, title, dot, body) {
+  return card(`${esc(title)} <span class="right">${machineTag(n.name)}</span>`,
+    dot, body, "flat");
+}
+
+function renderNodeOverview(n) {
+  if (!n.ok) {
+    $("overview").innerHTML = card(
+      `${esc(n.name)} <span class="right">离线</span>`, "crit",
+      `<div class="empty center" style="padding:34px 20px">
+        ${esc(n.error || "连不上这台机器")}<br>
+        <span style="font-size:12px; color:var(--faint)">
+          面板每 60 秒重试一次。检查节点的 sshd、网络，
+          以及 authorized_keys 里的那把受限密钥还在不在</span>
+      </div>`, "full flat");
+    return;
+  }
+  const m = n.memory || {}, c = n.containers || {}, cs = n.crowdsec || {};
+  const cards = [];
+
+  cards.push(nodeCard(n, "主机", n.load_percent > 85 ? "warn" : "ok", `
+    <div class="big sm">${n.load_percent ?? "—"}<span class="unit">% 负载</span></div>
+    <div class="sub">${n.cores} 核 · 负载 ${(n.load || []).map(x => x.toFixed(2)).join(" / ")}</div>
+    <div class="nodemetrics" style="margin-top:14px">
+      ${nodeMetric("内存", m.percent, `${fmtBytes(m.used)} / ${fmtBytes(m.total)}`)}
+      ${n.swap ? nodeMetric("交换", n.swap.percent,
+        `${fmtBytes(n.swap.used)} / ${fmtBytes(n.swap.total)}`) : ""}
+    </div>
+    <div class="nodefoot">
+      <span>${esc(n.hostname || "")}</span>
+      ${n.temp_c != null ? `<span>${n.temp_c}°C</span>` : ""}
+      <span class="dim">运行 ${fmtDur(n.uptime_seconds)}</span>
+    </div>`));
+
+  cards.push(nodeCard(n, "存储", (n.disks || [])[0]?.percent > 85 ? "warn" : "ok",
+    `<div class="nodemetrics">${(n.disks || []).map(x => nodeMetric(
+      esc(x.mount), x.percent,
+      `${esc(x.fs)} · ${fmtBytes(x.available)} 可用 / ${fmtBytes(x.total)}`)).join("")}
+     </div>` || '<div class="empty">无数据</div>'));
+
+  cards.push(nodeCard(n, "容器", c.stopped > 0 ? "" : "ok", `
+    <div class="stats">
+      <div class="stat"><div class="n">${c.running ?? 0}</div><div class="l">运行中</div></div>
+      <div class="stat"><div class="n" style="color:var(--faint)">${c.stopped ?? 0}</div>
+        <div class="l">已停止</div></div>
+    </div>
+    <div class="list">${(c.items || []).slice(0, 10).map(x => `
+      <div class="row"><span class="k"><span class="dot ok"></span>
+        <span style="color:var(--text)">${esc(x.name)}</span></span>
+        <span class="v dim" style="font-size:11.5px">${esc(x.status)}</span></div>`).join("")
+      || '<div class="empty">无运行中的容器</div>'}</div>
+    ${c.total > 10 ? `<div class="note">另有 ${c.total - 10} 个未列出</div>` : ""}`));
+
+  cards.push(nodeCard(n, "端口暴露", n.ports?.exposed > 20 ? "warn" : "ok", `
+    <div class="stats">
+      <div class="stat"><div class="n">${n.ports?.exposed ?? "—"}</div><div class="l">对外监听</div></div>
+      <div class="stat"><div class="n" style="color:var(--faint)">${n.ports?.loopback ?? "—"}</div>
+        <div class="l">仅本机</div></div>
+    </div>
+    <div class="tagwrap">${(n.ports?.items || []).slice(0, 18).map(p =>
+      `<span class="tag" title="${esc(p.proc || "")}">${p.port}</span>`).join("")}</div>
+    <div class="note">这里只区分"对外监听"和"回环"。要判断某个端口是真的公网
+      可达还是只在内网，得看这台机器前面的防火墙</div>`));
+
+  if (cs.ipset_entries != null) {
+    const bad = cs.agent !== "active" || cs.bouncer !== "active";
+    cards.push(nodeCard(n, "本机防护", bad ? "crit" : "ok", `
+      <div class="big sm">${cs.ipset_entries.toLocaleString()}<span class="unit">条已落地</span></div>
+      <div class="sub">iptables/ipset 里实际生效的封禁数</div>
+      <div style="margin-top:12px">
+        <div class="row"><span class="k"><span>检测 agent</span></span>
+          <span class="v"><span class="tag ${cs.agent === "active" ? "ok" : "crit"}">${
+            esc(cs.agent || "未知")}</span></span></div>
+        <div class="row"><span class="k"><span>拦截 bouncer</span></span>
+          <span class="v"><span class="tag ${cs.bouncer === "active" ? "ok" : "crit"}">${
+            esc(cs.bouncer || "未知")}</span></span></div>
+      </div>
+      <div class="note">这台机器上真实落地的规则数。决策由中央 LAPI 下发，
+        所以各节点的数字应该一致——差得多说明某台的 bouncer 没跟上</div>`));
+  }
+
+  const svc = Object.entries(n.services || {});
+  if (svc.length) {
+    cards.push(nodeCard(n, "服务", svc.some(([, v]) => v !== "active") ? "warn" : "ok",
+      `<div class="list">${svc.map(([k, v]) => `
+        <div class="row"><span class="k">
+          <span class="dot ${v === "active" ? "ok" : "crit"}"></span>
+          <span style="color:var(--text)">${esc(k)}</span></span>
+          <span class="v dim" style="font-size:11.5px">${esc(v)}</span></div>`).join("")}</div>
+       <div class="note">采集脚本固定检查这几个 systemd 单元。
+         名单写死在节点侧——让面板指定查什么，就等于把任意命令执行的能力还回去一部分</div>`));
+  }
+
+  cards.push(card(`未采集的项 <span class="right">${machineTag(n.name)}</span>`, "", `
+    <div class="note" style="margin:0; line-height:1.8">
+      <b>网络速率</b>、<b>活跃连接</b>、<b>证书到期</b>、<b>硬盘 SMART</b>
+      这几项节点上没采。它们要么需要持续采样（速率得算两次差值），
+      要么要额外的权限或工具（smartctl 需要 root 直接读设备）。<br>
+      采集脚本在 <code>scripts/node-collect.sh</code>，往里加几行 +
+      面板加个解析就能补上，按你实际想看什么逐个加。
+    </div>`, "flat"));
+
+  $("overview").innerHTML = cards.join("");
+}
+
+function renderNodePorts(n) {
+  if (!n.ok) { $("ports").innerHTML = ""; renderNodeOverview(n); return; }
+  const items = n.ports?.items || [];
+  $("portStat").innerHTML = `<h2><span class="dot ${
+    items.length > 20 ? "warn" : "ok"}"></span>端口概况
+    <span class="right">${machineTag(n.name)}</span></h2>
+    <div class="big">${n.ports.exposed}<span class="unit">对外监听</span></div>
+    <div class="sub">另有 ${n.ports.loopback} 个只绑回环</div>
+    <div class="note">节点侧采的是 <code>ss -lntupH</code>，只分"对外"和"回环"两档。
+      本机视图里那种"公网/内网/仅本机"三级分类要读防火墙规则才能判断，
+      节点上没做</div>`;
+  $("portPublic").innerHTML = `<h2><span class="dot info"></span>监听中的端口</h2>
+    <div class="tagwrap">${items.map(p =>
+      `<span class="tag" title="${esc(p.addr)} ${esc(p.proto)}">${p.port}${
+        p.proc ? " " + esc(p.proc) : ""}</span>`).join("") || "无"}</div>`;
+  const q = ($("portSearch")?.value || "").trim().toLowerCase();
+  const rows = items.filter(p => !q ||
+    String(p.port).includes(q) || (p.proc || "").toLowerCase().includes(q));
+  $("portList").innerHTML = rows.length ? `<table class="tbl">
+    <thead><tr><th>端口</th><th>协议</th><th>进程</th><th class="opt">监听地址</th></tr></thead>
+    <tbody>${rows.map(p => `<tr>
+      <td class="ipcell">${p.port}</td>
+      <td><span class="tag">${esc(p.proto)}</span></td>
+      <td>${esc(p.proc || "—")}</td>
+      <td class="why opt mono">${esc(p.addr)}</td>
+    </tr>`).join("")}</tbody></table>`
+    : '<div class="empty">没有匹配的端口</div>';
+}
+
+function renderNodeContainers(n) {
+  if (!n.ok) { renderNodeOverview(n); return; }
+  const c = n.containers || {};
+  $("ctrNote").textContent = `${c.running}/${c.total} 运行中 · 只读`;
+  $("ctrList").innerHTML = `
+    <div class="callout" style="margin-bottom:12px">
+      <b>节点视图下容器是只读的。</b>面板连节点用的是受限密钥，它只能执行采集脚本，
+      不能启停容器——这正是那把钥匙的价值所在：即使泄漏，拿到的也只是读监控数据的能力。
+      要支持远程操作，需要另发一把绑定操作脚本的密钥，那是独立的一块工作。
+    </div>
+    ${(c.items || []).length ? `<table class="tbl">
+      <thead><tr><th>容器</th><th>状态</th><th class="opt">镜像</th></tr></thead>
+      <tbody>${c.items.map(x => `<tr>
+        <td><span class="dot ok"></span> ${esc(x.name)}</td>
+        <td class="why">${esc(x.status)}</td>
+        <td class="why opt">${esc(x.image)}</td>
+      </tr>`).join("")}</tbody></table>`
+      : '<div class="empty">无运行中的容器</div>'}
+    ${c.stopped ? `<div class="note">另有 ${c.stopped} 个已停止的容器未列出——
+      多数是历史遗留（回滚备份之类），列出来会把在跑的淹掉</div>` : ""}`;
+  $("snapList").innerHTML = `<div class="empty center">
+    快照功能只对本机可用</div>`;
+}
+
+function renderNodeConns(n) {
+  $("connStat").innerHTML = `<h2><span class="dot"></span>活跃连接
+    <span class="right">${machineTag(n.name)}</span></h2>
+    <div class="empty center" style="padding:26px 12px; line-height:1.7">
+      节点上没采连接数据。<br>
+      <span style="font-size:12px; color:var(--faint)">
+        往 node-collect.sh 里加一段 <code>ss -tnH</code> 就能补上，
+        GeoIP 归属在面板侧查</span>
+    </div>`;
+  $("connPorts").innerHTML = "";
+  $("connList").innerHTML = "";
+  $("connNote").textContent = "";
+}
+
 function renderRemote(sec) {
   const d = sec?.data;
   if (!d?.items?.length) return "";
@@ -849,13 +1025,18 @@ function renderFwList(d) {
         : `<span class="tag" title="社区黑名单由 CrowdSec 中心同步，解了会被同步回来">不可解</span>`}</td>
     </tr>`;
   }).join("");
-  const hint = fwSearchResult !== null
+  const nodeHint = activeNode
+    ? `当前在 ${esc(activeNode)} 视图下，但<b>封禁列表不按机器过滤</b>——
+       决策由中央 LAPI 统一下发，每一条对所有节点都生效。
+       上面的攻击来源和国家分布才是这台机器检出的。<br>`
+    : "";
+  const hint = nodeHint + (fwSearchResult !== null
     ? `搜索命中 ${rows.length} 条（直接查库，覆盖全部 ${d.active_bans} 条封禁）`
     : d.truncated
       ? `手动与自动检出的已全部列出；社区黑名单共 ${d.ban_counts?.community ?? 0} 条，
          此处只载入最近 ${(d.listed ?? 0) - (d.ban_counts?.manual ?? 0) - (d.ban_counts?.detected ?? 0)} 条。
          要找具体 IP 请用上方搜索框，它直接查库`
-      : "";
+      : "");
   $("fwList").innerHTML = `<table class="tbl">
     <thead><tr><th>IP</th><th>来源</th><th class="opt">场景</th><th class="opt">归属</th><th>剩余</th><th></th></tr></thead>
     <tbody>${body}</tbody></table>
@@ -954,15 +1135,66 @@ function renderFwScenarios(sec) {
       白名单放过 ${d.whitelist_hits} 次。</div>`;
 }
 
+/* 节点视图下的防火墙数据。只过滤告警派生的那几块——封禁列表不过滤，
+   因为封禁本来就是全局决策、对所有节点生效，按机器筛掉反而让人以为
+   别的机器没被保护。 */
+function nodeFwView(d, name) {
+  const alerts = (d.alerts || []).filter(a => a.machine === name);
+  const tally = {}, country = {}, asn = {};
+  for (const a of alerts) {
+    if (a.ip) {
+      const t = tally[a.ip] || (tally[a.ip] = {ip: a.ip, count: 0, country: a.country,
+                                               as_name: a.as_name, scenarios: new Set(),
+                                               machines: [name]});
+      t.count++;
+      if (a.scenario_cn || a.scenario) t.scenarios.add(a.scenario_cn || a.scenario);
+    }
+    const cc = (a.country || "").toUpperCase() || "??";
+    const c = country[cc] || (country[cc] = {code: cc, count: 0, ips: new Set()});
+    c.count++; if (a.ip) c.ips.add(a.ip);
+    if (a.as_name) {
+      const s = asn[a.as_name] || (asn[a.as_name] = {as_name: a.as_name, count: 0,
+                                                     country: a.country, ips: new Set()});
+      s.count++; if (a.ip) s.ips.add(a.ip);
+    }
+  }
+  const pack = o => Object.values(o).map(x => ({...x, ips: x.ips.size}));
+  return {
+    ...d, alerts,
+    alerts_24h: alerts.filter(a => a.age_hours != null && a.age_hours <= 24).length,
+    top_sources: Object.values(tally).sort((a, b) => b.count - a.count).slice(0, 8)
+      .map(x => ({...x, scenarios: [...x.scenarios].sort()})),
+    by_country: pack(country).sort((a, b) => b.count - a.count).slice(0, 12),
+    by_asn: pack(asn).sort((a, b) => b.count - a.count).slice(0, 8)
+      .map(x => ({...x, as_label: x.as_name})),
+  };
+}
+
 function renderFirewall(sec, engineSec) {
   const d = sec?.data;
-  renderFwSources(engineSec); renderFwScenarios(engineSec);
   if (!d) {
     $("fwList").innerHTML = `<div class="empty">${esc(sec?.error || "CrowdSec 数据不可用")}</div>`;
     return;
   }
-  renderFwNodes(d);
-  renderFwStat(d); renderFwTop(d); renderFwGeo(d); renderFwAsn(d); renderFwList(d);
+  const node = currentNode();
+  // 引擎 metrics 读的是本机 6060，节点上没有对应数据
+  if (node) {
+    $("fwSources").innerHTML = `<h2><span class="dot"></span>防护引擎 · 日志源
+      <span class="right">${machineTag(node.name)}</span></h2>
+      <div class="empty center" style="padding:24px 12px; line-height:1.7">
+        引擎 metrics 只在本机采（6060 端口）。<br>
+        <span style="font-size:12px; color:var(--faint)">
+          这台节点读了哪些日志、解析率多少，要 ssh 上去 cscli metrics 看。
+          它检出的攻击结果已经汇总在下面的列表里</span>
+      </div>`;
+    $("fwScenarios").innerHTML = "";
+  } else {
+    renderFwSources(engineSec); renderFwScenarios(engineSec);
+  }
+  const view = node ? nodeFwView(d, node.name) : d;
+  renderFwNodes(d);          // 节点清单始终显示全部，这是跨节点的健康总览
+  renderFwStat(view); renderFwTop(view); renderFwGeo(view); renderFwAsn(view);
+  renderFwList(d);           // 封禁列表不过滤，见 nodeFwView 的注释
 }
 
 /* ================= 连接 ================= */
@@ -1749,6 +1981,8 @@ async function loadMeta() {
 /* ================= 调度 ================= */
 
 let activeTab = "overview", lastData = null, lastSections = null, sparkCache = {};
+// null = 本机；否则是 nodes 采集器里的节点名
+let activeNode = null;
 // 站点名来自后端 config 的 site_name，用于头部与主机卡片标题。
 // 拿到之前先用中性占位，别写死任何一台机器的名字
 let siteName = "主机";
@@ -1760,13 +1994,61 @@ document.querySelectorAll("nav button").forEach(b => {
     document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
     ["overview","firewall","conns","ports","history","containers","settings"].forEach(t =>
       $(t).classList.toggle("hide", t !== activeTab));
-    if (activeTab === "history") { loadHistory(); loadAudit(); }
-    if (activeTab === "containers") loadSnapshots();
+    // 这几个是本机专属的数据源，节点视图下不拉——省一次请求，
+    // 也避免拉回来的本机数据被误当成节点的
+    if (activeTab === "history" && !activeNode) { loadHistory(); loadAudit(); }
+    if (activeTab === "containers" && !activeNode) loadSnapshots();
     if (activeTab === "firewall") loadWhitelist();
-    if (activeTab === "settings") loadSettings();
+    if (activeTab === "settings" && !activeNode) loadSettings();
     refresh();
   };
 });
+
+/* 节点切换器。选中某台之后，各页签显示那台的数据；本机数据不掺进来，
+   宁可显示"该节点未采集此项"也不要让人误以为看到的是节点的 */
+function syncNodePicker(nodesSec) {
+  const items = nodesSec?.data?.items || [];
+  const sel = $("nodePick");
+  if (!items.length) { sel.classList.add("hide"); return; }
+  sel.classList.remove("hide");
+  const want = ["", ...items.map(n => n.name)].join("|");
+  // 只在节点集合变化时重建。每 5 秒重建一次会让下拉在展开时被抽掉
+  if (sel.dataset.sig !== want) {
+    sel.dataset.sig = want;
+    sel.innerHTML = `<option value="">本机（${esc(siteName)}）</option>` +
+      items.map(n => `<option value="${esc(n.name)}"${n.ok ? "" : " data-off=1"}>${
+        esc(n.name)}${n.ok ? "" : "（离线）"}</option>`).join("");
+  }
+  if (sel.value !== (activeNode || "")) sel.value = activeNode || "";
+}
+
+$("nodePick").onchange = e => {
+  activeNode = e.target.value || null;
+  document.body.classList.toggle("nodeview", !!activeNode);
+  // 切回本机时把那几个本机专属的数据源补拉回来
+  if (!activeNode) {
+    if (activeTab === "history") { loadHistory(); loadAudit(); }
+    if (activeTab === "containers") loadSnapshots();
+    if (activeTab === "settings") loadSettings();
+  }
+  refresh();
+};
+
+/* 节点没采集的那些项，给一条说明而不是空白——空白让人以为是坏了 */
+function notCollected(what, why) {
+  return `<div class="card full flat"><h2><span class="dot"></span>${esc(what)}
+      <span class="right">${esc(activeNode)}</span></h2>
+    <div class="empty center" style="padding:30px 20px; line-height:1.7">
+      ${why}<br>
+      <span style="font-size:12px; color:var(--faint)">
+        切回「本机」可以看这台的完整数据</span>
+    </div></div>`;
+}
+
+function currentNode() {
+  if (!activeNode) return null;
+  return (lastSections?.nodes?.data?.items || []).find(n => n.name === activeNode) || null;
+}
 
 $("banBtn").onclick = () => {
   const ip = $("banIp").value.trim();
@@ -1957,16 +2239,41 @@ async function refresh() {
     lastData = s.crowdsec?.data || null;
     renderAlertBar(body.alerts);
 
+    syncNodePicker(s.nodes);
+    const node = currentNode();
+    // 选中的节点掉线或被移除时自动退回本机，否则页面会僵在一个不存在的视图上
+    if (activeNode && !node) {
+      activeNode = null;
+      document.body.classList.remove("nodeview");
+      toast("节点已不在列表中", "已切回本机视图");
+    }
+
     if (activeTab === "overview") {
-      renderOverview(s);
+      node ? renderNodeOverview(node) : renderOverview(s);
     } else if (activeTab === "firewall") {
       renderFirewall(s.crowdsec, s.engine);
     } else if (activeTab === "conns") {
-      renderConns(s.connections);
+      node ? renderNodeConns(node) : renderConns(s.connections);
     } else if (activeTab === "ports") {
-      renderPorts(s.ports);
+      node ? renderNodePorts(node) : renderPorts(s.ports);
     } else if (activeTab === "containers") {
-      renderContainerTab(s.containers);
+      node ? renderNodeContainers(node) : renderContainerTab(s.containers);
+    }
+    // history 和 settings 在节点视图下不适用。用独立容器盖住而不是改它们的
+    // innerHTML——那两个页签里有静态结构，覆盖掉之后 loadHistory 就填不回去了
+    if (node && (activeTab === "history" || activeTab === "settings")) {
+      $(activeTab).classList.add("hide");
+      $("nodeNotice").classList.remove("hide");
+      $("nodeNotice").innerHTML = activeTab === "history"
+        ? notCollected("历史趋势",
+            "节点的历史数据存在它自己那台机器上，中央这边只聚合当前状态。" +
+            "跨节点存时序要另设计一套 schema，暂时没做。")
+        : notCollected("设置",
+            "这里配的是<b>面板自身</b>的告警规则和推送，不分节点——" +
+            "各节点的告警本来就汇总到同一个 CrowdSec 中央，走同一套规则。");
+    } else {
+      $("nodeNotice").classList.add("hide");
+      $(activeTab).classList.remove("hide");
     }
 
     const crit = body.alerts?.crit || 0, warn = body.alerts?.warn || 0;
