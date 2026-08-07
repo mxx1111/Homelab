@@ -11,13 +11,16 @@ import re
 
 import httpx
 
+from ..scenario_names import scenario_cn
+
 # cs_bucket_poured_total{name="xxx",source="yyy"} 42
 LINE = re.compile(r'^(?P<metric>[a-z_]+)(?:\{(?P<labels>[^}]*)\})?\s+(?P<value>[\d.eE+-]+)$')
 LABEL = re.compile(r'(\w+)="([^"]*)"')
 
-# 场景名前缀去掉，crowdsecurity/ssh-bf -> ssh-bf
+# 场景名翻成中文，crowdsecurity/ssh-bf -> SSH 暴力破解。
+# 认不出的场景 scenario_cn 会退回去掉前缀的原名，不会返回空
 def _short(name):
-    return (name or "").split("/")[-1]
+    return scenario_cn(name)
 
 
 def _parse(text):

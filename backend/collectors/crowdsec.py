@@ -6,6 +6,7 @@
 LAPI 的 bouncer key 只有 decisions 权限，读不到告警明细，故告警走库。
 """
 import json
+import re
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
@@ -13,8 +14,29 @@ from datetime import datetime, timezone
 import httpx
 
 from ..asn_names import pretty_as
+from ..scenario_names import scenario_cn
 
 DEFAULT_DB = "/var/lib/crowdsec/data/crowdsec.db"
+
+
+def _machine_label(machine_id):
+    """把 machine_id 变成人能看懂的名字。
+
+    CrowdSec 安装时自动注册的 machine_id 是 32 位 hex 加一段随机后缀，
+    像 9b931413...LEmbALk0MXN5ll9O，摆在告警列表里没有任何信息量。
+    手工注册的（cscli lapi register --machine szch）才是有意义的名字。
+
+    自动生成的那个必然是本机安装时留下的——远程节点得手工 register 才能进来，
+    所以直接显示"本机"，比截断一串 hex 强。
+    """
+    if not machine_id:
+        return None
+    if len(machine_id) > 32 and machine_id.isalnum():
+        return "本机"
+    return machine_id
+
+
+_NANO = re.compile(r"(\.\d{6})\d+")
 
 
 def _age_hours(value):
@@ -22,7 +44,10 @@ def _age_hours(value):
         return None
     try:
         if isinstance(value, str):
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            # machines.last_heartbeat / bouncers.last_pull 带纳秒（9 位小数），
+            # fromisoformat 只吃 3 位或 6 位，多出来的直接抛 ValueError，
+            # 心跳就会永远显示"未知"。截到微秒再解析。
+            dt = datetime.fromisoformat(_NANO.sub(r"\1", value).replace("Z", "+00:00"))
         else:
             dt = value
         if dt.tzinfo is None:
@@ -63,6 +88,7 @@ def _decisions_lapi(cfg):
     return [{
         "ip": d.get("value"),
         "reason": d.get("scenario"),
+        "reason_cn": scenario_cn(d.get("scenario")),
         "action": d.get("type"),
         "duration": d.get("duration"),
         "origin": d.get("origin"),
@@ -76,16 +102,18 @@ def _decisions_lapi(cfg):
 
 
 def _row_to_decision(r):
-    return {"ip": r[0], "reason": r[1], "action": r[2], "origin": r[3],
+    return {"ip": r[0], "reason": r[1], "reason_cn": scenario_cn(r[1]),
+            "action": r[2], "origin": r[3],
             "until": r[4], "expires_in": _until_seconds(r[4]), "scope": r[5],
             "kind": _kind(r[3]), "country": r[6], "as_name": r[7],
-            "as_label": pretty_as(r[7])}
+            "as_label": pretty_as(r[7]), "machine": _machine_label(r[8])}
 
 
 SELECT_DECISION = """
     SELECT d.value, d.scenario, d.type, d.origin, d.until, d.scope,
-           a.source_country, a.source_as_name
+           a.source_country, a.source_as_name, m.machine_id
     FROM decisions d LEFT JOIN alerts a ON d.alert_decisions = a.id
+                     LEFT JOIN machines m ON a.machine_alerts = m.id
     WHERE (d.until IS NULL OR d.until > datetime('now'))
 """
 
@@ -156,12 +184,74 @@ def _decisions_cscli():
         src = alert.get("source") or {}
         for dec in (alert.get("decisions") or []):
             items.append({"ip": dec.get("value"), "reason": dec.get("scenario"),
+                          "reason_cn": scenario_cn(dec.get("scenario")),
                           "action": dec.get("type"), "duration": dec.get("duration"),
                           "origin": dec.get("origin"), "kind": _kind(dec.get("origin")),
                           "scope": dec.get("scope"), "expires_in": None,
                           "country": src.get("cn"), "as_name": src.get("as_name"),
                           "as_label": pretty_as(src.get("as_name"))})
     return items
+
+
+# ---------- nodes ----------
+
+def _seconds_ago(value):
+    h = _age_hours(value)
+    return None if h is None else round(h * 3600)
+
+
+def _nodes_db(cfg):
+    """接入这个 LAPI 的机器清单。
+
+    agent 和 bouncer 要分开看，它们坏的方式不一样：
+      agent 停了   —— 不再产生新告警，机器等于没在监测，但已有封禁还在拦
+      bouncer 停了 —— 决策落不了地，规则停在最后一次拉取的状态，新攻击者进得来
+    只盯其中一个会漏掉另一半。
+
+    两者靠 IP 关联——CrowdSec 没有"节点"这个概念，machines 和 bouncers 是
+    两张互不相干的表，同一台机器上的 agent 和 bouncer 各自独立注册。
+    IP 对不上的（比如面板自己那个只读 key）单独列出来，不硬凑。
+    """
+    path = (cfg.get("crowdsec") or {}).get("db_path", DEFAULT_DB)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    try:
+        machines = conn.execute("""
+            SELECT machine_id, ip_address, version, last_heartbeat,
+                   is_validated, osname, osversion
+            FROM machines ORDER BY machine_id
+        """).fetchall()
+        bouncers = conn.execute("""
+            SELECT name, ip_address, type, last_pull, revoked, version
+            FROM bouncers WHERE revoked = 0
+        """).fetchall()
+    finally:
+        conn.close()
+
+    by_ip = {}
+    for name, ip, btype, last_pull, _revoked, ver in bouncers:
+        by_ip.setdefault(ip or "", []).append({
+            "name": name, "type": btype, "version": ver,
+            "pull_seconds": _seconds_ago(last_pull),
+        })
+
+    nodes, claimed = [], set()
+    for mid, ip, ver, hb, validated, osname, osver in machines:
+        bs = by_ip.get(ip or "", [])
+        if ip:
+            claimed.add(ip)
+        nodes.append({
+            "name": _machine_label(mid), "machine_id": mid, "ip": ip,
+            "version": (ver or "").split("-")[0] or None,
+            "os": f"{osname}/{osver}" if osname else None,
+            "heartbeat_seconds": _seconds_ago(hb),
+            "validated": bool(validated),
+            "bouncers": bs,
+        })
+
+    # 没有对应 agent 的 bouncer：可能是只读集成（面板自己的 key），
+    # 也可能是某台机器的 agent 掉了而 bouncer 还活着——后者要看得见
+    orphans = [b for ip, lst in by_ip.items() if ip not in claimed for b in lst]
+    return {"nodes": nodes, "orphan_bouncers": orphans}
 
 
 # ---------- alerts ----------
@@ -179,12 +269,15 @@ def _alerts_db(cfg, limit=200):
     path = (cfg.get("crowdsec") or {}).get("db_path", DEFAULT_DB)
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
     try:
+        # 关联 machines 是为了知道这条告警是哪台机器检出的。多机接入同一个
+        # 中央 LAPI 后，所有节点的告警都落在这一张表里，不带来源就分不清
+        # "谁在被打"
         rows = conn.execute("""
-            SELECT id, created_at, scenario, source_ip, source_country,
-                   source_as_name, events_count
-            FROM alerts
-            WHERE source_ip IS NOT NULL AND source_ip != ''
-            ORDER BY id DESC LIMIT ?
+            SELECT a.id, a.created_at, a.scenario, a.source_ip, a.source_country,
+                   a.source_as_name, a.events_count, m.machine_id
+            FROM alerts a LEFT JOIN machines m ON a.machine_alerts = m.id
+            WHERE a.source_ip IS NOT NULL AND a.source_ip != ''
+            ORDER BY a.id DESC LIMIT ?
         """, (limit,)).fetchall()
     finally:
         conn.close()
@@ -192,8 +285,9 @@ def _alerts_db(cfg, limit=200):
     for r in rows:
         age = _age_hours(r[1])
         items.append({"id": r[0], "created_at": r[1], "scenario": r[2],
+                      "scenario_cn": scenario_cn(r[2]),
                       "ip": r[3], "country": r[4], "as_name": r[5],
-                      "events_count": r[6],
+                      "events_count": r[6], "machine": _machine_label(r[7]),
                       "age_hours": round(age, 2) if age is not None else None})
     return items
 
@@ -212,9 +306,12 @@ def _alerts_cscli(limit=200):
             continue
         age = _age_hours(a.get("created_at"))
         items.append({"id": a.get("id"), "created_at": a.get("created_at"),
-                      "scenario": a.get("scenario"), "ip": src.get("value"),
+                      "scenario": a.get("scenario"),
+                      "scenario_cn": scenario_cn(a.get("scenario")),
+                      "ip": src.get("value"),
                       "country": src.get("cn"), "as_name": src.get("as_name"),
                       "events_count": a.get("events_count"),
+                      "machine": _machine_label(a.get("machine_id")),
                       "age_hours": round(age, 2) if age is not None else None})
     return items
 
@@ -318,16 +415,45 @@ def collect(cfg):
             slot = tally.setdefault(ip, {"ip": ip, "count": 0,
                                          "country": a.get("country"),
                                          "as_name": a.get("as_name"),
-                                         "scenarios": set()})
+                                         "scenarios": set(), "machines": set()})
             slot["count"] += 1
             if a.get("scenario"):
-                slot["scenarios"].add(a["scenario"].split("/")[-1])
+                slot["scenarios"].add(scenario_cn(a["scenario"]))
+            if a.get("machine"):
+                slot["machines"].add(a["machine"])
         top = sorted(tally.values(), key=lambda x: -x["count"])[:8]
         for slot in top:
             slot["scenarios"] = sorted(slot["scenarios"])
+            # 同一个 IP 打了多台，说明是扫全网的，不是冲着某台来的
+            slot["machines"] = sorted(slot["machines"])
         result["top_sources"] = top
         result["by_country"] = _by_country(alerts)
         result["by_asn"] = _by_asn(alerts)
+
+        # 按机器分：哪台被打得最凶。只有一台时前端不显示这一块
+        per_machine = {}
+        for a in alerts:
+            name = a.get("machine")
+            if not name:
+                continue
+            slot = per_machine.setdefault(name, {"machine": name, "count": 0,
+                                                 "recent": 0, "ips": set()})
+            slot["count"] += 1
+            if a.get("age_hours") is not None and a["age_hours"] <= 24:
+                slot["recent"] += 1
+            if a.get("ip"):
+                slot["ips"].add(a["ip"])
+        result["by_machine"] = sorted(
+            [{"machine": v["machine"], "count": v["count"],
+              "recent": v["recent"], "ips": len(v["ips"])}
+             for v in per_machine.values()], key=lambda x: -x["count"])
+
+    # 节点清单单独失败不影响主数据——多机是增量能力，
+    # 拿不到就退回单机视图，不该让整个面板报错
+    try:
+        result.update(_nodes_db(cfg))
+    except Exception as exc:  # noqa: BLE001
+        result["nodes_error"] = str(exc)[:120]
 
     if "decisions_error" in result and "alerts_error" in result:
         result["ok"] = False
