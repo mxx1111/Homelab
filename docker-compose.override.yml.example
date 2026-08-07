@@ -1,6 +1,8 @@
 # 本机专属挂载。compose 自动合并进 docker-compose.yml，不进版本库。
 services:
-  dashboard:
+  # 服务名必须与 docker-compose.yml 里的一致，否则 compose 会当成一个
+  # 新服务，报 "neither an image nor a build context"，整个项目失效
+  homelab-dashboard:
     volumes:
       # - /mnt/data:/mnt/data:ro
       # - /root/.ssh/id_remote:/root/.ssh/id_remote:ro
