@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .actions import ActionError, Actions, snapshot_plan
 from .alerts import AlertEngine
+from .auth import COOKIE, Auth
 from .cache import Store
 from .collectors import REGISTRY
 from . import demo
@@ -37,6 +38,8 @@ store = Store(demo.REGISTRY if DEMO else REGISTRY, CONFIG, history=history,
               alerts=alert_engine, whitelist=whitelist)
 actions = Actions(CONFIG)
 
+auth = Auth(CONFIG)
+
 FIREWALL_CFG = CONFIG.get("firewall") or {}
 FIREWALL_ENABLED = bool(FIREWALL_CFG.get("enabled", True))
 WRITE_TOKEN = str(FIREWALL_CFG.get("write_token") or "")
@@ -56,6 +59,15 @@ async def lifespan(_app: FastAPI):
     if DEMO:
         log.warning("演示模式：全部采集器返回仿真数据，不读取宿主机任何信息；"
                     "写操作落在内存沙盒，每 %d 分钟重置", demo.RESET_SECONDS // 60)
+    if auth.enabled:
+        log.info("面板登录: 已开启（用户 %s，会话 %g 小时）",
+                 auth.username, auth.session_hours)
+        if auth.plaintext:
+            log.warning("auth.password 是明文。生成散列后替换掉它："
+                        "docker exec <容器> python -m backend.hashpw '你的密码'")
+    else:
+        log.warning("面板登录: 未开启。面板能操作所有接入节点的防火墙，"
+                    "只在完全可信的网络里才可以这样跑")
     if WRITE_TOKEN:
         log.info("写操作认证: 需令牌")
     elif ALLOW_ANON_WRITE:
@@ -121,9 +133,43 @@ async def audit_middleware(request: Request, call_next):
     return response
 
 
+# 登录本身、健康检查、前端静态资源不需要会话，否则连登录页都打不开
+OPEN_PATHS = ("/api/auth/", "/api/health")
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """未登录时挡掉所有 API。
+
+    只挡 /api/，前端页面照常返回——页面拿不到数据会自己弹登录框，
+    比服务端重定向省事，也不用管前端路由。
+    """
+    path = request.url.path
+    if (not auth.enabled or not path.startswith("/api/")
+            or path.startswith(OPEN_PATHS)):
+        return await call_next(request)
+    if auth.valid(request.cookies.get(COOKIE)):
+        return await call_next(request)
+    # 带对 write_token 的请求也放行。不然中间件会挡在 _guard 前面，
+    # 脚本调用（curl 封个 IP）这条路等于被登录功能顺手砍掉了
+    if WRITE_TOKEN and request.headers.get("x-panel-token") == WRITE_TOKEN:
+        return await call_next(request)
+    return JSONResponse({"detail": "未登录"}, status_code=401)
+
+
+def _logged_in(request: Request):
+    return auth.enabled and auth.valid(request.cookies.get(COOKIE))
+
+
 def _guard(request: Request, token: str | None, what="写操作"):
-    """写操作的统一前置检查"""
+    """写操作的统一前置检查。
+
+    两条路都认：已登录的会话，或者带对 write_token 的请求。
+    保留后者是为了脚本调用——curl 一条命令封个 IP，不必先走登录换 cookie。
+    """
     who = request.client.host if request.client else "?"
+    if _logged_in(request):
+        return
     if not WRITE_TOKEN:
         if ALLOW_ANON_WRITE:
             return
@@ -135,6 +181,52 @@ def _guard(request: Request, token: str | None, what="写操作"):
     if token != WRITE_TOKEN:
         log.warning("拒绝来自 %s 的%s：token 不匹配", who, what)
         raise HTTPException(status_code=401, detail="缺少或错误的操作令牌")
+
+
+@app.get("/api/auth/state")
+def auth_state(request: Request):
+    """前端启动时问一次：要不要登录、现在登没登。未登录也能调，否则没法判断"""
+    return {"enabled": auth.enabled,
+            "logged_in": _logged_in(request),
+            "username": auth.username if auth.enabled else None,
+            "locked_for": auth.locked_for(_client_ip(request))}
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, payload: dict = Body(...)):
+    if not auth.enabled:
+        raise HTTPException(status_code=400, detail="未启用登录")
+    ip = _client_ip(request)
+    left = auth.locked_for(ip)
+    if left:
+        # 锁定期内连密码都不校验，免得给人当探测口令是否正确的信道
+        raise HTTPException(status_code=429,
+                            detail=f"失败次数过多，请 {left} 秒后再试")
+    token = auth.login(str(payload.get("username") or ""),
+                       str(payload.get("password") or ""), ip)
+    if not token:
+        history.record_audit(ip, "POST", "/api/auth/login", 401, 0,
+                             detail="登录失败", ua=request.headers.get("user-agent"))
+        raise HTTPException(status_code=401, detail="用户名或密码不对")
+    history.record_event("auth", "info", f"login:{ip}", f"{auth.username} 登录面板", ip)
+    resp = JSONResponse({"ok": True, "username": auth.username})
+    resp.set_cookie(
+        COOKIE, token, max_age=int(auth.session_hours * 3600),
+        httponly=True,          # JS 读不到，XSS 也偷不走会话
+        samesite="lax",         # 跨站表单提交带不上，挡掉 CSRF
+        # 内网多半用 http 访问，写死 secure=True 会导致 cookie 根本不生效，
+        # 表现为"登录成功但立刻又要登录"。按实际请求协议决定
+        secure=request.url.scheme == "https",
+        path="/")
+    return resp
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    auth.logout(request.cookies.get(COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE, path="/")
+    return resp
 
 
 @app.get("/api/health")
