@@ -1730,11 +1730,18 @@ async function loadMeta() {
   }
   if (fwMeta.write_locked) {
     $("fwOff").classList.remove("hide");
-    $("fwOff").innerHTML = "<b>写操作已锁定</b>——面板没有登录体系，未配置操作令牌时" +
-      "封禁与容器操作一律拒绝。在 config.yaml 的 <code>firewall.write_token</code> " +
-      "填一串随机字符（前端会多出令牌输入框），或在完全可信的内网里设 " +
-      "<code>allow_anonymous_write: true</code>，改完重启容器。";
+    $("fwOff").innerHTML = "<b>写操作已锁定</b>——既没开登录也没配操作令牌时，" +
+      "封禁与容器操作一律拒绝。三选一：在 config.yaml 的 <code>auth</code> 段" +
+      "填用户名密码（推荐，登录后自动放行）、<code>firewall.write_token</code> " +
+      "填一串随机字符（给脚本调用用），或在完全可信的内网里设 " +
+      "<code>allow_anonymous_write: true</code>。改完重启容器。";
     ["banIp","banDur","banWhy","banBtn"].forEach(i => $(i).disabled = true);
+  } else if (fwMeta.enabled) {
+    // 上一轮如果锁着，控件被禁用了，解锁后要恢复——meta 在登录后会重拉，
+    // 那时拿到的结果和登录前不同。firewall.enabled 为 false 时不能走这里，
+    // 否则会把上面刚禁用的控件又打开
+    $("fwOff").classList.add("hide");
+    ["banIp","banDur","banWhy","banBtn"].forEach(i => $(i).disabled = false);
   }
   if (fwMeta.token_required) {
     $("tokenRow").classList.remove("hide");

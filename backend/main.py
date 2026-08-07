@@ -301,12 +301,17 @@ def history_growth(hours: int = Query(168, ge=24, le=2160)):
 # ---------- 防火墙 ----------
 
 @app.get("/api/firewall/meta")
-def firewall_meta():
+def firewall_meta(request: Request):
+    # 判断口径必须和 _guard 一致，否则界面会和实际行为对不上：
+    # 已登录的会话本来就能写，再提示"写操作已锁定"就是假警报
+    logged_in = _logged_in(request)
     return {
         "enabled": FIREWALL_ENABLED,
-        "token_required": bool(WRITE_TOKEN),
+        # 登录之后不需要令牌，前端也就不该再显示那个输入框
+        "token_required": bool(WRITE_TOKEN) and not logged_in,
+        "logged_in": logged_in,
         # 前端据此提示"写操作被锁"，而不是让用户点了按钮才吃一个 403
-        "write_locked": not WRITE_TOKEN and not ALLOW_ANON_WRITE,
+        "write_locked": not logged_in and not WRITE_TOKEN and not ALLOW_ANON_WRITE,
         "durations": [{"value": k, "label": v} for k, v in DURATIONS.items()],
         "protected_networks": lapi.protected,
         "actions_enabled": actions.enabled,
