@@ -18,6 +18,8 @@ something breaks.
 The frontend has no build step and no dependencies. Charts are hand-written SVG.
 Three files, that's it.
 
+**Live demo → <https://homelab.88688.team>** (fully simulated data, click anything)
+
 ---
 
 ## Table of Contents
@@ -25,6 +27,7 @@ Three files, that's it.
 - [What it's for](#what-its-for)
 - [Features](#features)
 - [Getting Started](#getting-started)
+  - [Live demo](#live-demo)
   - [Prerequisites](#prerequisites)
   - [Step 1: Install CrowdSec (optional but recommended)](#step-1-install-crowdsec-optional-but-recommended)
   - [Step 2: Install the firewall bouncer](#step-2-install-the-firewall-bouncer)
@@ -96,12 +99,29 @@ Twelve collectors: `host` `network` `containers` `services` `crowdsec` `storage`
 `certs` `remote` `ports` `connections` `engine` `disks`. Each runs on its own
 loop and fails independently — one broken collector doesn't blank out the rest.
 
-> **Screenshots**: contributions welcome — drop them in `docs/screenshots/` and
-> reference them here.
+> Want to see it in action: **<https://homelab.88688.team>**. Screenshots of your
+> own deployment are welcome in `docs/screenshots/`.
 
 ---
 
 ## Getting Started
+
+### Live demo
+
+**<https://homelab.88688.team>** — nothing to install, click around freely.
+
+All data on the demo is simulated; none of it comes from a real machine. Actions
+like banning an IP or restarting a container really do take effect and show up in
+the UI, but they only mutate in-memory state and reset every hour. To run demo
+mode on your own machine (say, to show a colleague), use the demo compose file:
+
+```bash
+docker compose -f docker-compose.demo.yml up -d --build
+```
+
+The demo instance mounts no host paths, runs with `cap_drop: ALL`, and binds only
+to loopback — it cannot read anything from its host, which is precisely why it's
+safe to expose.
 
 ### Prerequisites
 
