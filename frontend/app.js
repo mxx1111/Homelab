@@ -566,17 +566,20 @@ function nodeMetric(label, pct, extra) {
   </div>`;
 }
 
+/* 每台节点一张卡片，和存储、网络那些一起在 grid 里流动。
+   本来做成了一张全宽卡片装下所有节点，但 grid 默认不回填空隙：前面的
+   安全态势只占一列，后面跟一个要占整行的卡片，grid 只能换行，
+   安全态势右边就空出一整排。拆成独立卡片顺带也解决了全宽把进度条
+   拉得老长的问题。 */
 function renderNodesCard(sec) {
   const d = sec?.data;
   if (!d?.items?.length) return "";
-  const bad = d.items.filter(n => !n.ok).length;
-  const boxes = d.items.map(n => {
+  return d.items.map(n => {
+    const title = `${machineTag(n.name)}<span class="right">${
+      n.ok ? esc(n.hostname || "") + " · " + n.latency_ms + "ms" : "离线"}</span>`;
     if (!n.ok) {
-      return `<div class="nodebox off">
-        <div class="nodehead">${machineTag(n.name)}
-          <span class="tag crit">离线</span></div>
-        <div class="nmx" style="margin-top:8px">${esc(n.error || "")}</div>
-      </div>`;
+      return card(title, "crit",
+        `<div class="empty center">${esc(n.error || "连不上")}</div>`, "flat");
     }
     const m = n.memory || {}, c = n.containers || {}, cs = n.crowdsec || {};
     const worst = (n.disks || [])[0];          // 已按使用率降序，第一个最满
@@ -587,14 +590,7 @@ function renderNodesCard(sec) {
       cs.agent && cs.agent !== "active" ? "agent 停了" : null,
       cs.bouncer && cs.bouncer !== "active" ? "bouncer 停了" : null,
     ].filter(Boolean);
-    return `<div class="nodebox nodeRow${nodeOpen === n.name ? " on" : ""}"
-                 data-node="${esc(n.name)}">
-      <div class="nodehead">
-        <span class="dot ${peak > 90 ? "crit" : peak > 75 ? "warn" : "ok"}"></span>
-        ${machineTag(n.name)}
-        <span class="nodehost">${esc(n.hostname || "")}</span>
-        <span class="nodelat">${n.latency_ms}ms</span>
-      </div>
+    return card(title, peak > 90 ? "crit" : peak > 75 ? "warn" : "ok", `
       ${down.length ? `<div class="nodealert">${down.map(esc).join(" · ")}</div>` : ""}
       <div class="nodemetrics">
         ${nodeMetric("负载", n.load_percent, `${n.cores} 核 · ${
@@ -613,13 +609,10 @@ function renderNodesCard(sec) {
         <span class="dim">${fmtDur(n.uptime_seconds)}</span>
       </div>
       ${nodeOpen === n.name ? nodeDetail(n) : ""}
-    </div>`;
+      <div class="nodemore nodeRow" data-node="${esc(n.name)}">${
+        nodeOpen === n.name ? "收起" : "磁盘 · 端口 · 服务明细"}</div>
+    `, "flat nodeCard");
   }).join("");
-  return card(`节点 <span class="right">${d.online}/${d.configured} 在线</span>`,
-    bad ? "crit" : "ok",
-    `<div class="nodegrid">${boxes}</div>
-     <div class="note">通过 SSH 受限密钥采集，那把钥匙只能执行采集脚本，
-       登不了 shell。点一台看磁盘、端口、服务明细</div>`, "full flat");
 }
 
 function nodeDetail(n) {

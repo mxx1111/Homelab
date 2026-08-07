@@ -361,25 +361,10 @@ select{cursor:pointer; appearance:none; padding-right:30px;
 .modal-head h3{font:500 16px/1 var(--serif)}
 .modal-head .sp{margin-left:auto}
 
-/* ---------- 节点网格 ----------
-   每台机器一个格子。auto-fit + minmax 让它自己决定排几列：
-   宽屏三四台并排，手机自动单列，不用写一堆断点 */
-.nodegrid{display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(232px,1fr))}
-.nodebox{
-  border:1px solid var(--border); border-radius:var(--radius-sm);
-  padding:12px 13px 11px; background:var(--card-alt); cursor:pointer;
-  transition:border-color .16s, background .16s;
-}
-.nodebox:hover{border-color:var(--border-strong)}
-.nodebox.on{border-color:var(--accent); background:var(--card)}
-/* 离线的格子不给点击手势——展开也没内容 */
-.nodebox.off{cursor:default; opacity:.75}
-
-.nodehead{display:flex; align-items:center; gap:7px; margin-bottom:10px}
-.nodehost{font:12px/1 var(--mono); color:var(--faint); overflow:hidden;
-          text-overflow:ellipsis; white-space:nowrap}
-.nodelat{margin-left:auto; font-size:11px; color:var(--faint);
-         font-variant-numeric:tabular-nums; flex:none}
+/* ---------- 节点卡片 ----------
+   每台一张，跟其他卡片一起在总览的 grid 里流动。不做成一张全宽卡片装下
+   所有节点：grid 默认不回填空隙，全宽卡片前面那张只占一列的卡片，
+   右边会空出一整排 */
 .nodealert{font-size:11.5px; color:var(--crit); background:var(--crit-soft);
            border-radius:5px; padding:4px 7px; margin-bottom:9px}
 
@@ -399,6 +384,14 @@ select{cursor:pointer; appearance:none; padding-right:30px;
 .nodefoot b{font-weight:600; color:var(--text); font-variant-numeric:tabular-nums}
 .nodefoot .dim{color:var(--faint); margin-left:auto}
 .nodedetail{margin-top:11px; padding-top:10px; border-top:1px solid var(--border)}
+/* 展开入口。做成整行而不是按钮：可点区域大，手机上好按 */
+.nodemore{
+  margin:10px -20px -18px; padding:9px 20px 10px; cursor:pointer;
+  font-size:11.5px; color:var(--faint); text-align:center;
+  border-top:1px solid var(--border); transition:.16s;
+  border-radius:0 0 var(--radius) var(--radius);
+}
+.nodemore:hover{color:var(--accent); background:var(--card-alt)}
 .tagwrap{display:flex; flex-wrap:wrap; gap:4px}
 
 /* 登录框复用 .modal 的遮罩，只把盒子改窄 */
@@ -456,8 +449,6 @@ select{cursor:pointer; appearance:none; padding-right:30px;
     display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px;
   }
   .nodeLine .v > span{margin-left:0 !important}
-  /* 手机上格子占满宽度，别为了并排把内容压窄 */
-  .nodegrid{grid-template-columns:1fr; gap:10px}
 
   .tbl .opt, .tbl th.opt{display:none}
   .tbl th{padding-right:8px; font-size:10px}
