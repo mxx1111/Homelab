@@ -375,7 +375,9 @@ select{cursor:pointer; appearance:none; padding-right:30px;
 .secmap .leaflet-control-attribution{font-size:10px; background:rgba(255,255,255,.84)}
 .secmap .leaflet-control-attribution a{color:#4D6D80}
 .secmap .leaflet-tooltip{font:12px/1.5 var(--sans); color:#242321;
+                         max-width:280px; white-space:normal; overflow-wrap:anywhere;
                          border:1px solid #D5D1C6; box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.secmap .map-provider{color:#6F6D66}
 .secmap-empty{position:absolute; inset:0; display:grid; place-items:center;
               color:var(--dim); font-size:13px; pointer-events:none; z-index:500;
               background:rgba(240,238,230,.72)}

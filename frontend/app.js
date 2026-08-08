@@ -2090,12 +2090,18 @@ function mapGeo(item) {
     ? [lat, lon] : null;
 }
 
-function addAttackMarker(row, label) {
+function compactMapText(value, maxLength=28) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function addAttackMarker(row, label, detail="") {
   const r = Math.min(18, 5 + Math.log2(row.events + 1) * 2.1);
   L.circleMarker([row.lat, row.lon], {
     radius:r, color:row.blocked ? "#BC4C3C" : "#FFFFFF",
     weight:row.blocked ? 3 : 2, fillColor:"#D97757", fillOpacity:.76,
-  }).bindTooltip(`${esc(label)}<br>${row.sources} 个攻击源 · ${row.events} 个事件` +
+  }).bindTooltip(`<b>${esc(label)}</b><br>${row.sources} 个攻击源 · ${row.events} 个事件` +
+    (detail ? `<br><span class="map-provider">${esc(detail)}</span>` : "") +
     `<br>${row.blocked ? row.blocked + " 个当前封禁" : "当前无封禁"}`,
     {direction:"top"}).addTo(secMarkerLayer);
 }
@@ -2141,11 +2147,16 @@ function renderSecurityMap(incidents, mapCfg={}) {
       if (item.blocked) slot.blocked++;
       if (item.as_name) slot.providers.add(item.as_name);
     }
-    const rows = Object.values(regions).sort((a,b) => b.events - a.events).map(x => ({
-      ...x, label:`${x.lat.toFixed(1)}°N · ${x.lon.toFixed(1)}°E`,
-      title:[...x.providers].join("、") || "中国来源区域",
-    }));
-    rows.forEach(x => addAttackMarker(x, x.title));
+    const rows = Object.values(regions).sort((a,b) => b.events - a.events).map(x => {
+      const providers = [...x.providers];
+      const providerSummary = providers.length
+        ? providers.slice(0,2).map(y => compactMapText(y)).join("、") +
+          (providers.length > 2 ? ` 等 ${providers.length} 家网络` : "")
+        : "网络归属未知";
+      return {...x, label:`${x.lat.toFixed(1)}°N · ${x.lon.toFixed(1)}°E`,
+        title:providerSummary, providerSummary};
+    });
+    rows.forEach(x => addAttackMarker(x, x.label, x.providerSummary));
     $("secMapMeta").textContent = `${rows.length} 个区域 · ${domesticSources} 个攻击源 · ${blockedSources} 个当前封禁`;
     $("secMapHint").textContent = "中国来源按 0.5° 经纬网格聚合；滚轮、双指缩放，拖动查看";
     $("secMapNote").textContent = "中国地图使用 CrowdSec 离线 GeoLite2-City 经纬度，只展示中国大陆及港澳台来源；没有省市字段时不猜省份。圆点大小表示事件量，红色外圈表示存在当前封禁。";
