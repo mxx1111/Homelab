@@ -28,14 +28,43 @@ _city_reader = None
 _city_reader_key = None
 _city_cache = {}
 
+_PROVINCE_NAMES = {
+    "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建",
+    "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州",
+    "云南", "陕西", "甘肃", "青海", "台湾",
+}
+_AUTONOMOUS_REGIONS = {
+    "内蒙古": "内蒙古自治区", "广西": "广西壮族自治区", "西藏": "西藏自治区",
+    "宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区",
+}
+
 
 def _localized_name(record):
     names = getattr(record, "names", None) or {}
     return names.get("zh-CN") or names.get("zh") or getattr(record, "name", None)
 
 
+def _complete_china_place(subdivision_name, city_name):
+    subdivision = str(subdivision_name or "").strip()
+    city = str(city_name or "").strip()
+    if subdivision in _PROVINCE_NAMES:
+        subdivision += "省"
+    elif subdivision in ("北京", "上海", "天津", "重庆"):
+        subdivision += "市"
+    else:
+        subdivision = _AUTONOMOUS_REGIONS.get(subdivision, subdivision)
+    if (city and city not in ("北京", "上海", "天津", "重庆") and
+            not city.endswith(("市", "州", "盟", "地区", "县", "区", "旗"))):
+        city += "市"
+    elif city in ("北京", "上海", "天津", "重庆"):
+        city += "市"
+    return subdivision, city
+
+
 def _join_place(country_code, country_name, subdivision_name, city_name):
     """把 GeoLite2 的多级名称整理成完整中文地名，避免“广东省深圳市深圳市”。"""
+    if country_code == "CN":
+        subdivision_name, city_name = _complete_china_place(subdivision_name, city_name)
     parts = []
     if country_code not in ("CN", "HK", "MO", "TW") and country_name:
         parts.append(country_name)
