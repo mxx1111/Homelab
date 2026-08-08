@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Homelab</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<link rel="stylesheet" href="/static/app.css?v=0.5.0-5">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v=1.9.4">
+<link rel="stylesheet" href="/static/app.css?v=0.5.0-6">
 </head>
 <body>
 <div class="wrap">
@@ -17,8 +16,8 @@
     </div>
     <nav>
       <button class="on" data-tab="overview">总览</button>
-      <button data-tab="firewall">防火墙</button>
       <button data-tab="security">安全中心</button>
+      <button data-tab="firewall">防火墙</button>
       <button data-tab="conns">连接</button>
       <button data-tab="ports">端口</button>
       <button data-tab="history">历史</button>
@@ -41,7 +40,29 @@
   <div id="alertbar" class="alertbar"></div>
 
   <!-- 总览 -->
-  <div id="overview" class="grid"></div>
+  <div id="overview">
+    <section id="overviewSecurity" class="overview-security">
+      <div class="overview-security-head">
+        <div>
+          <div class="eyebrow"><span class="dot info"></span>安全态势</div>
+          <h2 id="overviewSecurityTitle">正在核查防护状态</h2>
+          <p id="overviewSecurityNote">汇总 CrowdSec、节点防护与公网资产</p>
+        </div>
+        <button class="btn ghost" data-open-security>进入安全中心</button>
+      </div>
+      <div class="overview-security-body">
+        <div>
+          <div class="security-kpis" id="overviewSecurityKpis"></div>
+          <div class="overview-attack-list" id="overviewAttackList"></div>
+        </div>
+        <div class="overview-map-wrap">
+          <div class="overview-map" id="overviewMiniMap"></div>
+          <div class="overview-map-caption">24 小时攻击来源概览 · 详细地图可在安全中心查看</div>
+        </div>
+      </div>
+    </section>
+    <div id="overviewCards" class="overview-cards"></div>
+  </div>
 
   <!-- 防火墙 -->
   <div id="firewall" class="hide">
@@ -292,8 +313,7 @@
   </form>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="/static/app.js?v=0.5.0-5"></script>
+<script src="/static/vendor/leaflet/leaflet.js?v=1.9.4"></script>
+<script src="/static/app.js?v=0.5.0-6"></script>
 </body>
 </html>

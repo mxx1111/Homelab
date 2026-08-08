@@ -584,12 +584,103 @@ function renderContainersCard(sec) {
     </div><div class="list">${rows}</div>`, "span2");
 }
 
+let overviewSecData = null, overviewSecLoadedAt = 0, overviewSecLoading = false;
+
+const overviewSecurityShell = () => `
+  <section id="overviewSecurity" class="overview-security">
+    <div class="overview-security-head">
+      <div>
+        <div class="eyebrow"><span class="dot info"></span>安全态势</div>
+        <h2 id="overviewSecurityTitle">正在核查防护状态</h2>
+        <p id="overviewSecurityNote">汇总 CrowdSec、节点防护与公网资产</p>
+      </div>
+      <button class="btn ghost" data-open-security>进入安全中心</button>
+    </div>
+    <div class="overview-security-body">
+      <div>
+        <div class="security-kpis" id="overviewSecurityKpis"></div>
+        <div class="overview-attack-list" id="overviewAttackList"></div>
+      </div>
+      <div class="overview-map-wrap">
+        <div class="overview-map" id="overviewMiniMap"></div>
+        <div class="overview-map-caption">24 小时攻击来源概览 · 详细地图可在安全中心查看</div>
+      </div>
+    </div>
+  </section>
+  <div id="overviewCards" class="overview-cards"></div>`;
+
+function ensureOverviewShell() {
+  if ($("overviewCards")) return;
+  destroyOverviewMiniMap();
+  $("overview").innerHTML = overviewSecurityShell();
+}
+
+function overviewPlaceRows(incidents) {
+  const grouped = {};
+  for (const item of incidents || []) {
+    const label = item.location_name || (item.country ? cname(item.country) : "未知地区");
+    const slot = grouped[label] || (grouped[label] = {label, sources:0, events:0, blocked:0});
+    slot.sources++;
+    slot.events += Math.max(1, Number(item.event_count || item.count || 1));
+    if (item.blocked) slot.blocked++;
+  }
+  return Object.values(grouped).sort((a,b) => b.events - a.events).slice(0,4);
+}
+
+function renderOverviewSecurity(crowdsec, security) {
+  ensureOverviewShell();
+  const cs = crowdsec?.data || {}, cc = security?.coverage?.counts || {};
+  const incidents = security?.incidents?.items || [];
+  const crit = Number(cc.crit || 0), warn = Number(cc.warn || 0);
+  const title = crit ? `发现 ${crit} 个严重保护缺口`
+    : warn ? `有 ${warn} 项防护需要确认`
+    : security ? "当前防护链路运行正常" : "正在核查完整防护状态";
+  const titleEl = $("overviewSecurityTitle");
+  titleEl.textContent = title;
+  titleEl.className = crit ? "crit" : warn ? "warn" : "";
+  $("overviewSecurityNote").textContent = security
+    ? `节点在线 ${cc.nodes_online ?? 0}/${cc.nodes_total ?? 0} · 检出、决策、下发与落地统一核查`
+    : "基础态势已加载，保护覆盖正在核查";
+  $("overviewSecurityKpis").innerHTML = `
+    <div class="security-kpi"><b>${cs.active_bans ?? 0}</b><span>当前封禁</span></div>
+    <div class="security-kpi"><b class="${cs.alerts_24h ? "warn" : ""}">${cs.alerts_24h ?? 0}</b><span>24h 攻击</span></div>
+    <div class="security-kpi"><b class="${crit ? "crit" : warn ? "warn" : ""}">${crit + warn}</b><span>保护缺口</span></div>
+    <div class="security-kpi"><b>${cc.nodes_online ?? "—"}<i>/${cc.nodes_total ?? "—"}</i></b><span>在线节点</span></div>`;
+
+  const places = overviewPlaceRows(incidents);
+  $("overviewAttackList").innerHTML = places.length
+    ? `<div class="overview-list-title">攻击较集中的位置</div>${places.map((x,i) => `
+      <div class="overview-attack-row">
+        <span><i>${i+1}</i>${esc(x.label)}</span>
+        <em>${x.sources} 源${x.blocked ? ` · ${x.blocked} 封` : ""}</em>
+        <b>${x.events} 事件</b>
+      </div>`).join("")}`
+    : `<div class="overview-calm">${security ? "24 小时内暂无可定位攻击" : "攻击位置正在汇总"}</div>`;
+  if (security) renderOverviewMiniMap(incidents);
+}
+
+async function loadOverviewSecurity(force=false) {
+  if (overviewSecLoading || activeTab !== "overview" || activeNode) return;
+  if (!force && overviewSecData && Date.now() - overviewSecLoadedAt < 20000) return;
+  overviewSecLoading = true;
+  try {
+    const res = await fetch("/api/security/overview?hours=24&limit=120", {cache:"no-store"});
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+    overviewSecData = d; overviewSecLoadedAt = Date.now();
+    if (activeTab === "overview" && !activeNode)
+      renderOverviewSecurity(lastSections?.crowdsec, overviewSecData);
+  } catch { /* 总览已有 CrowdSec 基础态势，完整核查失败不阻断首页 */ }
+  finally { overviewSecLoading = false; }
+}
+
 /* 总览整块重绘。抽出来是为了让"展开某个节点"这类纯本地状态变化
    能直接重画，不用重新发一轮请求 */
 function renderOverview(s) {
+  ensureOverviewShell();
   const growth = window._growthCache;
-  $("overview").innerHTML = [
-    renderSecurity(s.crowdsec),
+  renderOverviewSecurity(s.crowdsec, overviewSecData);
+  $("overviewCards").innerHTML = [
     renderNodesCard(s.nodes),
     renderStorage(s.storage, growth),
     renderHost(s.host, sparkCache),
@@ -603,6 +694,7 @@ function renderOverview(s) {
     renderRemote(s.remote),
     renderContainersCard(s.containers),
   ].join("");
+  loadOverviewSecurity();
 }
 
 /* 被管理节点。每台一个带进度条的小格子，宽屏并排、手机单列。
@@ -710,6 +802,7 @@ function nodeCard(n, title, dot, body) {
 }
 
 function renderNodeOverview(n) {
+  destroyOverviewMiniMap();
   if (!n.ok) {
     $("overview").innerHTML = card(
       `${esc(n.name)} <span class="right">离线</span>`, "crit",
@@ -2040,16 +2133,132 @@ async function loadMeta() {
 let secRange = 168, secData = null, secLoadedAt = 0, secLoading = false;
 let secBanConfirm = null, secRollbackConfirm = null;
 let secMapMode = "world", secLeaflet = null, secMarkerLayer = null;
-let secMapRenderedMode = null;
+let secMapRenderedMode = null, secBasemapLayers = null, secTileLayer = null;
+let secMapSourceEl = null, overviewMiniLeaflet = null, overviewMiniMarkers = null;
+let overviewMiniBase = null, localMapDataPromise = null;
+
+const CHINA_CITY_LABELS = [
+  ["北京市",39.9042,116.4074,1],["上海市",31.2304,121.4737,1],
+  ["广东省广州市",23.1291,113.2644,1],["广东省深圳市",22.5431,114.0579,1],
+  ["香港特别行政区",22.3193,114.1694,1],["澳门特别行政区",22.1987,113.5439,1],
+  ["四川省成都市",30.5728,104.0668,2],["湖北省武汉市",30.5928,114.3055,2],
+  ["陕西省西安市",34.3416,108.9398,2],["重庆市",29.5630,106.5516,2],
+  ["天津市",39.0842,117.2010,2],["江苏省南京市",32.0603,118.7969,2],
+  ["浙江省杭州市",30.2741,120.1551,2],["台湾省台北市",25.0330,121.5654,2],
+  ["辽宁省沈阳市",41.8057,123.4315,3],["吉林省长春市",43.8171,125.3235,3],
+  ["黑龙江省哈尔滨市",45.8038,126.5349,3],["河北省石家庄市",38.0428,114.5149,3],
+  ["山西省太原市",37.8706,112.5489,3],["山东省济南市",36.6512,117.1201,3],
+  ["河南省郑州市",34.7466,113.6254,3],["安徽省合肥市",31.8206,117.2272,3],
+  ["福建省福州市",26.0745,119.2965,3],["江西省南昌市",28.6820,115.8579,3],
+  ["湖南省长沙市",28.2282,112.9388,3],["海南省海口市",20.0440,110.1999,3],
+  ["贵州省贵阳市",26.6470,106.6302,3],["云南省昆明市",25.0389,102.7183,3],
+  ["甘肃省兰州市",36.0611,103.8343,3],["青海省西宁市",36.6171,101.7782,3],
+  ["内蒙古自治区呼和浩特市",40.8426,111.7492,3],
+  ["广西壮族自治区南宁市",22.8170,108.3665,3],
+  ["西藏自治区拉萨市",29.6520,91.1721,3],
+  ["宁夏回族自治区银川市",38.4872,106.2309,3],
+  ["新疆维吾尔自治区乌鲁木齐市",43.8256,87.6168,3],
+];
 
 const secStatusName = s => ({open:"待处理", investigating:"调查中",
   resolved:"已处理", ignored:"已忽略"}[s] || s || "待处理");
 const secChangeName = s => ({pending:"执行中", applied:"已生效", failed:"失败",
   rolled_back:"已回滚", auto_rolled_back:"自动回滚", rollback_failed:"回滚失败"}[s] || s);
 
+function loadLocalMapData() {
+  if (!localMapDataPromise) localMapDataPromise = Promise.all([
+    fetch("/static/maps/world.geojson", {cache:"force-cache"}).then(r => {
+      if (!r.ok) throw new Error(`世界底图 HTTP ${r.status}`); return r.json();
+    }),
+    fetch("/static/maps/china-provinces.geojson", {cache:"force-cache"}).then(r => {
+      if (!r.ok) throw new Error(`中国底图 HTTP ${r.status}`); return r.json();
+    }),
+  ]).then(([world, china]) => ({world, china}));
+  return localMapDataPromise;
+}
+
+function createWorldLayer(data, pane, compact=false) {
+  return L.geoJSON(data, {pane, interactive:false, style: {
+    className:"local-basemap-shape", color:compact ? "#C9C4B8" : "#C2BDB1",
+    weight:compact ? .65 : .85, fillColor:compact ? "#F7F5EF" : "#FAF9F5",
+    fillOpacity:compact ? .92 : .9,
+  }});
+}
+
+function createChinaLayer(data, pane) {
+  return L.geoJSON(data, {pane, interactive:false, style: {
+    className:"local-basemap-shape local-china-shape", color:"#B7B1A4",
+    weight:.8, fillColor:"#EFECE3", fillOpacity:.32,
+  }});
+}
+
+function mapLabel(text, lat, lon, kind="country") {
+  return L.marker([lat,lon], {pane:"secLabelsPane", interactive:false,
+    icon:L.divIcon({className:`local-map-label ${kind}`, html:`<span>${esc(text)}</span>`,
+      iconSize:null, iconAnchor:[0,0]})});
+}
+
+function setSecurityMapSource(text, state="local") {
+  if (!secMapSourceEl) return;
+  secMapSourceEl.textContent = text;
+  secMapSourceEl.className = `map-source-state ${state}`;
+}
+
+function renderSecurityBaseLabels() {
+  if (!secLeaflet || !secBasemapLayers) return;
+  const {worldData, chinaData, labels} = secBasemapLayers;
+  labels.clearLayers();
+  const zoom = secLeaflet.getZoom();
+  if (secMapMode === "china") {
+    if (zoom >= 4) for (const f of chinaData.features || []) {
+      const p = f.properties || {};
+      if (Number(p.min_zoom || 4.5) > zoom + .8) continue;
+      if (Number.isFinite(Number(p.label_lat)) && Number.isFinite(Number(p.label_lon)))
+        mapLabel(p.name_zh || p.name_en, Number(p.label_lat), Number(p.label_lon), "province").addTo(labels);
+    }
+    const cityRank = zoom >= 5 ? 3 : zoom >= 4 ? 2 : 1;
+    for (const [name,lat,lon,rank] of CHINA_CITY_LABELS)
+      if (rank <= cityRank) mapLabel(name,lat,lon,"city").addTo(labels);
+  } else {
+    const labelCount = zoom >= 4 ? 110 : zoom >= 3 ? 60 : zoom >= 2 ? 28 : 14;
+    const countries = [...(worldData.features || [])].filter(f => {
+      const p = f.properties || {}, lat = Number(p.label_y), lon = Number(p.label_x);
+      return Number.isFinite(lat) && Number.isFinite(lon);
+    }).sort((a,b) => Number(b.properties?.pop_est || 0) - Number(a.properties?.pop_est || 0));
+    for (const f of countries.slice(0,labelCount)) {
+      const p = f.properties || {};
+      mapLabel(COUNTRY[p.iso_a2] || p.name_zh || p.name_en,
+        Number(p.label_y),Number(p.label_x),"country").addTo(labels);
+    }
+  }
+}
+
+function applySecurityBasemapMode() {
+  if (!secLeaflet || !secBasemapLayers) return;
+  const china = secBasemapLayers.china;
+  if (secMapMode === "china" && !secLeaflet.hasLayer(china)) china.addTo(secLeaflet);
+  if (secMapMode !== "china" && secLeaflet.hasLayer(china)) secLeaflet.removeLayer(china);
+  renderSecurityBaseLabels();
+}
+
+function initSecurityBasemap(map) {
+  setSecurityMapSource("本地简图");
+  loadLocalMapData().then(({world,china}) => {
+    if (map !== secLeaflet) return;
+    const worldLayer = createWorldLayer(world,"secBasemapPane").addTo(map);
+    const chinaLayer = createChinaLayer(china,"secBasemapPane");
+    const labels = L.layerGroup().addTo(map);
+    secBasemapLayers = {world:worldLayer, china:chinaLayer, labels,
+      worldData:world, chinaData:china};
+    map.attributionControl.addAttribution(
+      '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a>');
+    applySecurityBasemapMode();
+  }).catch(() => setSecurityMapSource("本地底图加载失败", "error"));
+}
+
 function ensureSecurityMap(mapCfg) {
   if (!window.L) {
-    $("secMap").innerHTML = '<div class="secmap-empty">Leaflet 地图组件加载失败，请检查浏览器网络后刷新</div>';
+    $("secMap").innerHTML = '<div class="secmap-empty">本地地图组件加载失败，请刷新页面</div>';
     return null;
   }
   if (secLeaflet) return secLeaflet;
@@ -2058,17 +2267,81 @@ function ensureSecurityMap(mapCfg) {
     touchZoom:true, keyboard:true, minZoom:1,
     maxZoom:Number(mapCfg?.max_zoom || 12), worldCopyJump:true,
   });
-  const tileUrl = mapCfg?.tile_url || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  secLeaflet.createPane("secBasemapPane");
+  secLeaflet.getPane("secBasemapPane").style.zIndex = 210;
+  secLeaflet.getPane("secBasemapPane").style.pointerEvents = "none";
+  secLeaflet.createPane("secLabelsPane");
+  secLeaflet.getPane("secLabelsPane").style.zIndex = 350;
+  secLeaflet.getPane("secLabelsPane").style.pointerEvents = "none";
+  const SourceControl = L.Control.extend({onAdd() {
+    secMapSourceEl = L.DomUtil.create("div", "map-source-state local");
+    secMapSourceEl.textContent = "本地简图"; return secMapSourceEl;
+  }});
+  new SourceControl({position:"bottomright"}).addTo(secLeaflet);
+  initSecurityBasemap(secLeaflet);
+
+  const tileUrl = mapCfg?.external_tiles ? String(mapCfg?.tile_url || "") : "";
   if (tileUrl) {
-    L.tileLayer(tileUrl, {
+    let loaded = 0, failed = 0;
+    secTileLayer = L.tileLayer(tileUrl, {
       maxZoom:Number(mapCfg?.max_zoom || 12),
-      attribution:mapCfg?.attribution ||
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      attribution:mapCfg?.attribution || "",
     }).addTo(secLeaflet);
+    secTileLayer.on("tileload", () => { loaded++; setSecurityMapSource("详细底图", "detail"); });
+    secTileLayer.on("tileerror", () => {
+      failed++;
+      if (!loaded && failed >= 4 && secLeaflet?.hasLayer(secTileLayer)) {
+        secLeaflet.removeLayer(secTileLayer);
+        setSecurityMapSource("详细底图不可用 · 已切换本地简图", "fallback");
+      }
+    });
   }
   secMarkerLayer = L.layerGroup().addTo(secLeaflet);
   L.control.scale({imperial:false, position:"bottomleft"}).addTo(secLeaflet);
+  secLeaflet.on("zoomend", renderSecurityBaseLabels);
   return secLeaflet;
+}
+
+function destroyOverviewMiniMap() {
+  if (overviewMiniLeaflet) overviewMiniLeaflet.remove();
+  overviewMiniLeaflet = null; overviewMiniMarkers = null; overviewMiniBase = null;
+}
+
+function renderOverviewMiniMap(incidents) {
+  const container = $("overviewMiniMap");
+  if (!container || !window.L) return;
+  if (overviewMiniLeaflet && overviewMiniLeaflet.getContainer() !== container)
+    destroyOverviewMiniMap();
+  if (!overviewMiniLeaflet) {
+    overviewMiniLeaflet = L.map(container, {zoomControl:false, attributionControl:false,
+      dragging:false, scrollWheelZoom:false, doubleClickZoom:false, touchZoom:false,
+      keyboard:false, boxZoom:false, minZoom:1, maxZoom:3, worldCopyJump:true});
+    overviewMiniLeaflet.createPane("overviewBasemapPane");
+    overviewMiniLeaflet.getPane("overviewBasemapPane").style.zIndex = 210;
+    overviewMiniLeaflet.getPane("overviewBasemapPane").style.pointerEvents = "none";
+    overviewMiniMarkers = L.layerGroup().addTo(overviewMiniLeaflet);
+    overviewMiniLeaflet.fitBounds([[-55,-175],[75,175]], {padding:[4,4], animate:false});
+  }
+  if (!overviewMiniBase) {
+    overviewMiniBase = {loading:true, layer:null};
+    const map = overviewMiniLeaflet;
+    loadLocalMapData().then(({world}) => {
+      if (map !== overviewMiniLeaflet) return;
+      overviewMiniBase.layer = createWorldLayer(world,"overviewBasemapPane",true).addTo(map);
+    }).catch(() => { if (map === overviewMiniLeaflet) container.classList.add("map-failed"); });
+  }
+  overviewMiniMarkers.clearLayers();
+  for (const item of incidents || []) {
+    const geo = mapGeo(item);
+    if (!geo) continue;
+    const events = Math.max(1, Number(item.event_count || item.count || 1));
+    L.circleMarker(geo, {radius:Math.min(9,3 + Math.log2(events + 1)),
+      color:item.blocked ? "#BC4C3C" : "#FFFFFF", weight:item.blocked ? 2 : 1.2,
+      fillColor:"#D97757", fillOpacity:.78})
+      .bindTooltip(`${esc(item.location_name || cname(item.country || ""))} · ${events} 事件`,
+        {direction:"top", className:"overview-map-tip"}).addTo(overviewMiniMarkers);
+  }
+  setTimeout(() => overviewMiniLeaflet?.invalidateSize({pan:false}), 0);
 }
 
 function mapEmpty(message) {
@@ -2124,6 +2397,7 @@ function renderSecurityMap(incidents, mapCfg={}) {
   if (!map) return;
   secMarkerLayer.clearLayers();
   mapEmpty("");
+  applySecurityBasemapMode();
 
   if (secMapMode === "china") {
     const domesticCodes = new Set(["CN","HK","MO","TW"]), regions = {};
@@ -2195,7 +2469,7 @@ function renderSecurityMap(incidents, mapCfg={}) {
     const blockedSources = rows.reduce((n,x) => n + x.blocked, 0);
     $("secMapMeta").textContent = `${rows.length} 个国家 · ${totalSources} 个攻击源 · ${blockedSources} 个当前封禁`;
     $("secMapHint").textContent = "世界地图按国家聚合；滚轮、双指缩放，拖动查看";
-    $("secMapNote").textContent = "世界地图按国家聚合攻击来源。底图由 OpenStreetMap 瓦片提供，瓦片服务只收到当前地图视野和浏览器网络信息，攻击 IP 与事件数据始终只在本页面本地叠加。";
+    $("secMapNote").textContent = "世界地图按国家聚合攻击来源。本地 Natural Earth 简图不依赖 VPN、Key 或第三方请求；攻击 IP 与事件数据始终只在本页面本地叠加。";
     renderMapRank(rows, "暂无国家级攻击数据");
     if (!rows.length) mapEmpty("所选时间内没有可定位的攻击事件");
     if (secMapRenderedMode !== "world")
@@ -2521,6 +2795,11 @@ $("secRefresh").onclick = () => { secLoadedAt = 0; loadSecurity(true); };
 // 列表里的按钮每次重绘都是新元素，统一用事件委托
 document.addEventListener("click", e => {
   const t = e.target;
+  const openSecurity = t.closest?.("[data-open-security]");
+  if (openSecurity) {
+    document.querySelector('nav button[data-tab="security"]')?.click();
+    return;
+  }
   // 节点行展开/收起。用 closest 是因为点到的多半是行内的 span 而不是行本身
   const nodeRow = t.closest?.(".nodeRow");
   if (nodeRow) {

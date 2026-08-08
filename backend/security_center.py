@@ -152,16 +152,19 @@ class SecurityCenter:
                 continue
 
     def map_options(self):
-        """前端底图配置。攻击点不发给瓦片服务，只在浏览器本地叠加。"""
+        """前端底图配置。
+
+        本地 Natural Earth 矢量底图始终启用。外部瓦片必须显式打开，避免国内
+        网络访问不到默认 OSM 时，把整张攻击地图拖成空白。
+        """
         try:
             max_zoom = max(3, min(19, int(self.map_cfg.get("max_zoom", 12))))
         except (TypeError, ValueError):
             max_zoom = 12
         return {
-            "tile_url": str(self.map_cfg.get("tile_url") or
-                            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
-            "attribution": str(self.map_cfg.get("attribution") or
-                               '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'),
+            "external_tiles": bool(self.map_cfg.get("external_tiles", False)),
+            "tile_url": str(self.map_cfg.get("tile_url") or ""),
+            "attribution": str(self.map_cfg.get("attribution") or ""),
             "max_zoom": max_zoom,
         }
 

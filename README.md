@@ -512,8 +512,9 @@ CrowdSec 的任何配置文件。
 - **事件中心**：按攻击源跨机器聚合 CrowdSec 告警，保存调查中、已处理、误报
   与备注。可选配置 `HOMELAB_CROWDSEC_CTI_KEY` 后按需查询 CrowdSec CTI，结果
   缓存在本地 SQLite；没配 key 时不访问外网
-- **攻击态势**：使用开源 [Leaflet](https://leafletjs.com/)（BSD-2-Clause）
-  交互地图，可缩放、拖动并切换世界/中国视图。
+- **攻击态势**：使用随项目一起部署的开源 [Leaflet](https://leafletjs.com/)
+  （BSD-2-Clause）与 Natural Earth 本地简图，可缩放、拖动并切换世界/中国
+  视图，不依赖 VPN、地图 Key 或第三方底图服务。
   世界视图按国家聚合；中国视图使用 CrowdSec 本地 GeoLite2-City 数据库读取
   中文省市和经纬度，按 0.5° 网格聚合中国大陆及港澳台来源。攻击 IP 和事件数据只在浏览器本地
   叠加，不会传给底图服务；普通连接也不会被算作攻击
@@ -528,10 +529,12 @@ CrowdSec 的任何配置文件。
 `security_center.crowdsec_appsec.enabled` 默认关闭，保留适配接口用于以后单独的
 观察模式验证，避免双 WAF 带来的延迟和误报。
 
-地图默认使用 OpenStreetMap 标准瓦片，并在地图右下角保留署名。低流量家庭面板
-可以直接使用；公开或高流量部署应在 `security_center.map.tile_url` 中换成自建或
-已授权的 XYZ 瓦片服务，同时设置对应 `attribution`。高德/百度使用不同坐标系且
-通常需要平台 Key，不能直接拿 CrowdSec 的 WGS84 经纬度硬套。
+地图默认直接加载 `/static/maps/` 下的 Natural Earth 世界边界、中国省级边界和
+本地中文标签；即使完全断开地图外网，攻击点和地理背景仍然可见。需要街道级细节
+时，可以显式打开 `security_center.map.external_tiles`，再配置自建或已授权的 XYZ
+瓦片与对应 `attribution`；瓦片连续失败时会自动保留本地简图。高德/百度使用不同
+坐标系且通常需要平台 Key，不能直接拿 CrowdSec 的 WGS84 经纬度硬套，也不要使用
+未授权的内部瓦片地址。
 
 ### 告警与推送
 
