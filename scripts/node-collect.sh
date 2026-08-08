@@ -27,7 +27,7 @@ run() { timeout "${1}" "${@:2}" 2>/dev/null; }
 echo "###META"
 echo "hostname=$(hostname)"
 echo "collected_at=$(date +%s)"
-echo "script_version=1"
+echo "script_version=4"
 
 echo "###HOST"
 run 2 cat /proc/loadavg
@@ -74,6 +74,83 @@ if command -v cscli >/dev/null 2>&1; then
   fi
   echo "agent=$(systemctl is-active crowdsec 2>/dev/null || echo unknown)"
   echo "bouncer=$(systemctl is-active crowdsec-firewall-bouncer 2>/dev/null || echo unknown)"
+  # bouncer 的 ipset 条数只能证明规则已下发；链计数才说明规则真的拦到过包。
+  # 只读规则与计数，不改防火墙。IPv4/IPv6、nft 兼容层都尽量覆盖。
+  blocked_packets=0
+  blocked_bytes=0
+  for fw in iptables ip6tables; do
+    command -v "$fw" >/dev/null 2>&1 || continue
+    chains=$(run 4 "$fw" -S | awk '$1=="-N" && tolower($2) ~ /crowdsec/ {print $2}')
+    for chain in $chains; do
+      counters=$(run 4 "$fw" -nvx -L "$chain" | awk '
+        NR>2 && ($3=="DROP" || $3=="REJECT" || tolower($0) ~ /crowdsec.*blacklist/) {
+          p+=$1; b+=$2
+        }
+        END {printf "%d %d",p,b}')
+      p=${counters%% *}; b=${counters##* }
+      case "$p" in ''|*[!0-9]*) p=0;; esac
+      case "$b" in ''|*[!0-9]*) b=0;; esac
+      blocked_packets=$((blocked_packets + p))
+      blocked_bytes=$((blocked_bytes + b))
+    done
+  done
+  echo "blocked_packets=$blocked_packets"
+  echo "blocked_bytes=$blocked_bytes"
+fi
+
+echo "###APPSEC"
+# 1Panel WAF 在部分节点上，不一定和中央面板同机。这里只读输出聚合值，
+# 不传站点域名、规则内容、请求 URI 或 IP。没有 1Panel 的节点保持 unavailable。
+waf_data=/opt/1panel/apps/openresty/openresty/1pwaf/data
+if [ -d "$waf_data" ] && command -v python3 >/dev/null 2>&1; then
+  timeout 6 python3 - "$waf_data" <<'PY' 2>/dev/null
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+def load(name):
+    try:
+        with (root / "conf" / name).open(encoding="utf-8") as fp:
+            return json.load(fp)
+    except (OSError, ValueError, TypeError):
+        return None
+
+def count(name, table, where=""):
+    path = root / "db" / "waf" / name
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        try:
+            return conn.execute(f"SELECT COUNT(*) FROM {table} {where}").fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+cfg = load("global.json")
+sites = load("sites.json")
+enabled = set()
+if isinstance(cfg, dict):
+    enabled = {k for k, v in cfg.items()
+               if isinstance(v, dict) and
+               (v.get("enable", v.get("enabled")) is True or
+                str(v.get("state") or "").lower() == "on")}
+print("adapter=onepanel")
+print("available=true")
+print(f"site_count={len(sites) if isinstance(sites, (dict, list)) else ''}")
+print(f"request_rows={count('nginx_logs.db', 'nginx_logs') or 0}")
+print(f"attack_rows={count('attack_logs.db', 'attack_logs') or 0}")
+print(f"blocked_rows={count('attack_logs.db', 'attack_logs', 'WHERE is_block=1') or 0}")
+print(f"waf={'true' if enabled.intersection({'waf','sql','xss'}) else 'false'}")
+print(f"rate_limit={'true' if enabled.intersection({'cc','urlcc','attackCount'}) else 'false'}")
+print(f"bot={'true' if 'bot' in enabled else 'false'}")
+print(f"geo={'true' if 'geoRestrict' in enabled else 'false'}")
+print(f"allow_deny={'true' if enabled.intersection({'ipWhite','ipBlack','urlWhite','urlBlack'}) else 'false'}")
+PY
+else
+  echo "available=false"
 fi
 
 echo "###SERVICES"

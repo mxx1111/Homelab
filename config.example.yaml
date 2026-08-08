@@ -112,6 +112,25 @@ firewall:
   # 只有确认它仅暴露于可信内网、且不接多节点时，才改成 true
   allow_anonymous_write: false
 
+# 安全中心只聚合现有防护，默认不会改 1Panel/OpenResty、iptables 或代理链路。
+security_center:
+  enabled: true
+  # 可选：把 1Panel OpenResty 的 1pwaf/data 目录只读挂载到这里后，
+  # 页面会显示已有 WAF 规则能力与统计；未挂载时安全降级为“不可用”。
+  onepanel_waf:
+    path: /app/security/1panel-waf
+  # 当前已有 1Panel WAF 时保持 false，避免两个 WAF 串在 80/443 上。
+  # 将来单独验证 CrowdSec AppSec 时再在观察模式启用。
+  crowdsec_appsec:
+    enabled: false
+    listen: ""
+  cti:
+    # API key 放 .env 的 HOMELAB_CROWDSEC_CTI_KEY，不写进配置仓库。
+    cache_seconds: 21600
+  # 非标准端口上的数据库/管理服务可在这里补充，安全中心会按高风险监听提示。
+  # sensitive_ports:
+  #   58379: Redis
+
 # 指标与事件历史。落 SQLite，容器里挂在 /app/data
 history:
   enabled: true

@@ -604,7 +604,9 @@ function renderNodesCard(sec) {
         <span>容器 <b>${c.running}</b>/${c.total}</span>
         <span>端口 <b>${n.ports?.exposed ?? "—"}</b></span>
         ${cs.ipset_entries != null
-          ? `<span>拦截 <b>${cs.ipset_entries.toLocaleString()}</b></span>` : ""}
+          ? `<span>规则 <b>${cs.ipset_entries.toLocaleString()}</b></span>` : ""}
+        ${cs.blocked_packets != null
+          ? `<span>命中 <b>${cs.blocked_packets.toLocaleString()}</b></span>` : ""}
         ${n.temp_c != null ? `<span>${n.temp_c}°C</span>` : ""}
         <span class="dim">${fmtDur(n.uptime_seconds)}</span>
       </div>
@@ -725,6 +727,8 @@ function renderNodeOverview(n) {
         <div class="row"><span class="k"><span>拦截 bouncer</span></span>
           <span class="v"><span class="tag ${cs.bouncer === "active" ? "ok" : "crit"}">${
             esc(cs.bouncer || "未知")}</span></span></div>
+        ${cs.blocked_packets != null ? `<div class="row"><span class="k"><span>实际命中</span></span>
+          <span class="v">${cs.blocked_packets.toLocaleString()} 包 · ${fmtBytes(cs.blocked_bytes)}</span></div>` : ""}
       </div>
       <div class="note">这台机器上真实落地的规则数。决策由中央 LAPI 下发，
         所以各节点的数字应该一致——差得多说明某台的 bouncer 没跟上</div>`));
@@ -1978,6 +1982,147 @@ async function loadMeta() {
     (fwMeta.notify_enabled ? "" : `<br>推送未启用，新封禁不会通知你。在 config.yaml 的 notify 段填 Server 酱 sendkey。`);
 }
 
+/* ================= 安全中心 ================= */
+
+let secRange = 168, secData = null, secLoadedAt = 0, secLoading = false;
+let secBanConfirm = null, secRollbackConfirm = null;
+
+const secStatusName = s => ({open:"待处理", investigating:"调查中",
+  resolved:"已处理", ignored:"已忽略"}[s] || s || "待处理");
+const secChangeName = s => ({pending:"执行中", applied:"已生效", failed:"失败",
+  rolled_back:"已回滚", auto_rolled_back:"自动回滚", rollback_failed:"回滚失败"}[s] || s);
+
+function renderSecurityCenter(d) {
+  secData = d;
+  const c = d.coverage || {}, cc = c.counts || {};
+  const cDot = cc.crit ? "crit" : cc.warn ? "warn" : "ok";
+  $("secCoverage").innerHTML = `<h2><span class="dot ${cDot}"></span>保护覆盖
+      <span class="right">${c.status === "healthy" ? "链路正常" : "存在缺口"}</span></h2>
+    <div class="stats">
+      <div class="stat"><div class="n">${cc.assets ?? 0}</div><div class="l">受管资产</div></div>
+      <div class="stat"><div class="n" style="color:${cc.crit?"var(--crit)":"inherit"}">${cc.crit ?? 0}</div><div class="l">严重缺口</div></div>
+      <div class="stat"><div class="n" style="color:${cc.warn?"var(--warn)":"inherit"}">${cc.warn ?? 0}</div><div class="l">待确认</div></div>
+    </div>
+    <div class="note">节点在线 ${cc.nodes_online ?? 0}/${cc.nodes_total ?? 0}，资产来自当前采集快照</div>`;
+
+  $("secPipeline").innerHTML = `<h2><span class="dot ${cDot}"></span>防护闭环
+      <span class="right">检出 → 决策 → 下发 → 生效 → 命中</span></h2>
+    <div class="secpipe">${(c.pipeline || []).map((x, i) => `
+      <div class="secstage"><span>${i + 1}</span><b>${esc(x.label)}</b><em>${esc(x.value)}</em></div>`
+    ).join("")}</div>`;
+
+  const ap = d.appsec || {}, op = ap.onepanel || {}, ca = ap.crowdsec_appsec || {};
+  const appDot = op.available ? "ok" : ca.configured ? "warn" : "warn";
+  const caps = Object.entries(op.capabilities || {}).filter(([,v]) => v).map(([k]) => ({
+    waf:"规则防护", rate_limit:"限流", bot:"机器人", geo:"地域", allow_deny:"黑白名单"}[k] || k));
+  $("secAppsec").innerHTML = `<h2><span class="dot ${appDot}"></span>应用防护</h2>
+    <div class="big sm">${op.available ? "1Panel WAF" : ca.configured ? "CrowdSec AppSec" : "待接入"}
+      ${op.machine ? machineTag(op.machine) : ""}</div>
+    <div class="sub">${esc(op.message || ca.message || "")}</div>
+    ${caps.length ? `<div class="tagwrap" style="margin-top:12px">${caps.map(x => `<span class="tag ok">${esc(x)}</span>`).join("")}</div>` : ""}
+    ${op.available ? `<div class="note">请求记录 ${op.request_rows ?? "—"} · 攻击 ${op.attack_rows ?? "—"} · 拦截 ${op.blocked_rows ?? "—"}${(op.remote_nodes || []).length > 1 ? ` · 另 ${op.remote_nodes.length - 1} 个 WAF 节点` : ""}</div>` : ""}`;
+
+  const issues = c.issues || [];
+  $("secIssues").innerHTML = issues.length ? `<table class="tbl"><thead><tr>
+      <th>级别</th><th>机器/目标</th><th>缺口</th><th>建议</th></tr></thead><tbody>
+    ${issues.map(x => `<tr><td><span class="tag ${esc(x.level)}">${x.level === "crit" ? "严重" : "确认"}</span></td>
+      <td>${machineTag(x.machine)} ${x.target != null ? `<span class="mono">${esc(x.target)}</span>` : ""}</td>
+      <td>${esc(x.title)}</td><td class="why">${esc(x.detail)}</td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty">当前采集范围内没有发现保护缺口</div>`;
+
+  const inc = d.incidents || {}, incidents = inc.items || [];
+  $("secIncidents").innerHTML = incidents.length ? `<table class="tbl"><thead><tr>
+      <th>攻击源</th><th>涉及机器</th><th>场景</th><th>次数</th><th>状态</th><th></th></tr></thead><tbody>
+    ${incidents.map(x => `<tr class="${x.false_positive ? "stale" : ""}">
+      <td><span class="ipcell">${esc(x.ip)}</span>${x.country ? ` <span class="tag">${esc(cname(x.country))}</span>` : ""}<br>
+        <span class="note">最近 ${esc(agoHours(x.last_age_hours))}${x.blocked ? " · 已封禁" : ""}</span></td>
+      <td><div class="tagwrap">${(x.machines || []).map(m => machineTag(m)).join("") || "—"}</div></td>
+      <td class="why" title="${esc((x.scenarios || []).join("、"))}">${esc((x.scenarios || []).join("、") || "—")}</td>
+      <td>${x.count} 组<br><span class="note">${x.event_count || 0} 事件</span></td>
+      <td><span class="tag ${x.status === "resolved" ? "ok" : x.status === "investigating" ? "warn" : ""}">${esc(secStatusName(x.status))}</span>
+        ${x.false_positive ? '<span class="tag">误报</span>' : ""}${x.note ? `<div class="note" title="${esc(x.note)}">${esc(x.note)}</div>` : ""}</td>
+      <td class="act"><button class="btn sm ghost" data-sec-cti="${esc(x.ip)}">情报</button>
+        <button class="btn sm ghost" data-sec-note="${esc(x.key)}">备注</button>
+        <button class="btn sm ghost" data-sec-status="${esc(x.key)}" data-status="${x.status === "resolved" ? "open" : "resolved"}">${x.status === "resolved" ? "重开" : "处理"}</button>
+        <button class="btn sm ghost" data-sec-fp="${esc(x.key)}">${x.false_positive ? "取消误报" : "误报"}</button>
+        ${x.blocked ? "" : `<button class="btn sm ${secBanConfirm === x.ip ? "confirm" : "danger"}" data-sec-ban="${esc(x.ip)}">${secBanConfirm === x.ip ? "再点确认" : "临时封禁"}</button>`}</td>
+    </tr>`).join("")}</tbody></table>` : `<div class="empty">所选时间内没有 CrowdSec 攻击事件</div>`;
+
+  const changes = d.changes || [];
+  $("secChanges").innerHTML = changes.length ? `<table class="tbl"><thead><tr>
+      <th>时间</th><th>目标</th><th>动作</th><th>状态</th><th>说明</th><th></th></tr></thead><tbody>
+    ${changes.map(x => `<tr><td>${clock(x.ts)}</td><td class="ipcell">${esc(x.target)}</td>
+      <td>${x.action === "ban" ? "临时封禁" : "解除封禁"}</td>
+      <td><span class="tag ${x.status === "applied" ? "warn" : x.status.includes("failed") ? "crit" : "ok"}">${esc(secChangeName(x.status))}</span></td>
+      <td class="why">${esc(x.detail || "")}</td><td class="act">${x.status === "applied" && x.action === "ban"
+        ? `<button class="btn sm ${secRollbackConfirm === x.id ? "confirm" : "ghost"}" data-sec-rollback="${esc(x.id)}">${secRollbackConfirm === x.id ? "再点确认" : "回滚"}</button>` : ""}</td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">还没有安全变更记录</div>`;
+  $("secUpdated").textContent = "核查于 " + new Date().toLocaleTimeString();
+}
+
+async function loadSecurity(force=false) {
+  if (secLoading || (!force && Date.now() - secLoadedAt < 20000)) return;
+  secLoading = true;
+  try {
+    const res = await fetch(`/api/security/overview?hours=${secRange}&limit=200`, {cache:"no-store"});
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+    secLoadedAt = Date.now();
+    renderSecurityCenter(d);
+  } catch (e) {
+    $("secIssues").innerHTML = `<div class="empty">安全中心加载失败：${esc(e.message)}</div>`;
+  } finally { secLoading = false; }
+}
+
+async function updateSecurityIncident(key, patch) {
+  const current = (secData?.incidents?.items || []).find(x => x.key === key) || {};
+  try {
+    await api(`/api/security/incidents/${encodeURIComponent(key)}`, "PATCH", {
+      status: patch.status ?? current.status ?? "open",
+      note: patch.note ?? current.note ?? "",
+      false_positive: patch.false_positive ?? current.false_positive ?? false,
+    });
+    toast("事件状态已保存", "刷新采集后仍会保留");
+    secLoadedAt = 0; await loadSecurity(true);
+  } catch (e) { toast("保存失败", e.message, true); }
+}
+
+async function doSecurityBan(ip) {
+  try {
+    const r = await api("/api/security/changes/ban", "POST", {
+      ip, duration:"4h", reason:"事件中心确认后临时封禁"});
+    toast(`已临时封禁 ${ip}`, `变更 ${r.change_id.slice(0,8)}，健康核查通过`);
+  } catch (e) { toast("安全变更失败", e.message, true); }
+  secBanConfirm = null; secLoadedAt = 0; await loadSecurity(true); await refresh();
+}
+
+async function doSecurityRollback(id) {
+  try {
+    await api(`/api/security/changes/${encodeURIComponent(id)}/rollback`, "POST");
+    toast("已回滚安全变更", "对应封禁已解除");
+  } catch (e) { toast("回滚失败", e.message, true); }
+  secRollbackConfirm = null; secLoadedAt = 0; await loadSecurity(true); await refresh();
+}
+
+async function showSecurityCti(ip) {
+  try {
+    const res = await fetch(`/api/security/cti/${encodeURIComponent(ip)}`), d = await res.json();
+    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
+    if (!d.enabled) { toast("威胁情报未启用", d.message || "未配置 CTI key"); return; }
+    const x = d.data || {};
+    $("modal").innerHTML = `<div class="modal"><div class="modal-box">
+      <div class="modal-head"><h3>${esc(ip)} 威胁情报</h3><span class="sp"></span>
+        <button class="btn sm ghost" id="ctiClose">关闭</button></div>
+      <div class="grid cols2"><div class="card flat"><h2>结论</h2>
+        <div class="row"><span class="k">恶意度</span><span class="v">${esc(x.maliciousness || x.reputation || "—")}</span></div>
+        <div class="row"><span class="k">置信度</span><span class="v">${esc(x.confidence || "—")}</span></div>
+        <div class="row"><span class="k">分类</span><span class="v">${esc((x.behaviors || x.classifications || []).join?.("、") || "—")}</span></div>
+      </div><div class="card flat"><h2>原始情报</h2><pre class="logbox">${esc(JSON.stringify(x, null, 2))}</pre></div></div>
+    </div></div>`;
+    $("ctiClose").onclick = () => $("modal").innerHTML = "";
+  } catch (e) { toast("情报查询失败", e.message, true); }
+}
+
 /* ================= 调度 ================= */
 
 let activeTab = "overview", lastData = null, lastSections = null, sparkCache = {};
@@ -1992,13 +2137,14 @@ document.querySelectorAll("nav button").forEach(b => {
   b.onclick = () => {
     activeTab = b.dataset.tab;
     document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-    ["overview","firewall","conns","ports","history","containers","settings"].forEach(t =>
+    ["overview","firewall","security","conns","ports","history","containers","settings"].forEach(t =>
       $(t).classList.toggle("hide", t !== activeTab));
     // 这几个是本机专属的数据源，节点视图下不拉——省一次请求，
     // 也避免拉回来的本机数据被误当成节点的
     if (activeTab === "history" && !activeNode) { loadHistory(); loadAudit(); }
     if (activeTab === "containers" && !activeNode) loadSnapshots();
     if (activeTab === "firewall") loadWhitelist();
+    if (activeTab === "security") loadSecurity(true);
     if (activeTab === "settings" && !activeNode) loadSettings();
     refresh();
   };
@@ -2030,6 +2176,7 @@ $("nodePick").onchange = e => {
     if (activeTab === "history") { loadHistory(); loadAudit(); }
     if (activeTab === "containers") loadSnapshots();
     if (activeTab === "settings") loadSettings();
+    if (activeTab === "security") loadSecurity(true);
   }
   refresh();
 };
@@ -2141,6 +2288,14 @@ document.querySelectorAll("[data-range]").forEach(c => {
     loadHistory();
   };
 });
+document.querySelectorAll("[data-sec-range]").forEach(c => {
+  c.onclick = () => {
+    secRange = parseInt(c.dataset.secRange);
+    document.querySelectorAll("[data-sec-range]").forEach(x => x.classList.toggle("on", x === c));
+    secLoadedAt = 0; loadSecurity(true);
+  };
+});
+$("secRefresh").onclick = () => { secLoadedAt = 0; loadSecurity(true); };
 
 // 列表里的按钮每次重绘都是新元素，统一用事件委托
 document.addEventListener("click", e => {
@@ -2202,6 +2357,39 @@ document.addEventListener("click", e => {
     return;
   }
   if (t.dataset?.logs) { showLogs(t.dataset.logs); return; }
+  if (t.dataset?.secCti) { showSecurityCti(t.dataset.secCti); return; }
+  if (t.dataset?.secNote) {
+    const item = (secData?.incidents?.items || []).find(x => x.key === t.dataset.secNote) || {};
+    const note = prompt("事件备注", item.note || "");
+    if (note !== null) updateSecurityIncident(t.dataset.secNote, {note});
+    return;
+  }
+  if (t.dataset?.secStatus) {
+    updateSecurityIncident(t.dataset.secStatus, {status:t.dataset.status}); return;
+  }
+  if (t.dataset?.secFp) {
+    const item = (secData?.incidents?.items || []).find(x => x.key === t.dataset.secFp) || {};
+    updateSecurityIncident(t.dataset.secFp, {false_positive:!item.false_positive,
+      status: item.false_positive ? "open" : "ignored"}); return;
+  }
+  if (t.dataset?.secBan) {
+    const ip = t.dataset.secBan;
+    if (secBanConfirm === ip) doSecurityBan(ip);
+    else {
+      secBanConfirm = ip; renderSecurityCenter(secData);
+      setTimeout(() => { if (secBanConfirm === ip) { secBanConfirm=null; renderSecurityCenter(secData); } }, 5000);
+    }
+    return;
+  }
+  if (t.dataset?.secRollback) {
+    const id = t.dataset.secRollback;
+    if (secRollbackConfirm === id) doSecurityRollback(id);
+    else {
+      secRollbackConfirm = id; renderSecurityCenter(secData);
+      setTimeout(() => { if (secRollbackConfirm === id) { secRollbackConfirm=null; renderSecurityCenter(secData); } }, 5000);
+    }
+    return;
+  }
   if (t.dataset?.copy) {
     navigator.clipboard.writeText(t.dataset.copy)
       .then(() => toast("命令已复制", "到宿主机上以 root 执行"))
@@ -2252,6 +2440,8 @@ async function refresh() {
       node ? renderNodeOverview(node) : renderOverview(s);
     } else if (activeTab === "firewall") {
       renderFirewall(s.crowdsec, s.engine);
+    } else if (activeTab === "security") {
+      loadSecurity();
     } else if (activeTab === "conns") {
       node ? renderNodeConns(node) : renderConns(s.connections);
     } else if (activeTab === "ports") {

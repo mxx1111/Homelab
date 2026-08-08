@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import logging
 import time
+import uuid
+from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,6 +23,7 @@ from .config import CONFIG, CONFIG_PATH
 from .firewall import DURATIONS, FirewallError, LapiClient, Whitelist
 from .history import History
 from .notify import Notifier
+from .security_center import SecurityCenter
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -27,6 +33,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 STARTED_AT = time.time()
 
 history = History(CONFIG)
+security_center = SecurityCenter(CONFIG, history)
 notifier = Notifier(CONFIG)
 alert_engine = AlertEngine(CONFIG, history, notifier)
 lapi = LapiClient(CONFIG)
@@ -87,7 +94,7 @@ async def lifespan(_app: FastAPI):
     history.stop()
 
 
-app = FastAPI(title="Homelab Dashboard", version="0.4.0",
+app = FastAPI(title="Homelab Dashboard", version="0.5.0",
               docs_url="/api/docs", lifespan=lifespan)
 
 
@@ -161,7 +168,7 @@ def _logged_in(request: Request):
     return auth.enabled and auth.valid(request.cookies.get(COOKIE))
 
 
-def _guard(request: Request, token: str | None, what="写操作"):
+def _guard(request: Request, token: Optional[str], what="写操作"):
     """写操作的统一前置检查。
 
     两条路都认：已登录的会话，或者带对 write_token 的请求。
@@ -283,7 +290,7 @@ def history_metrics():
 
 @app.get("/api/history/events")
 def history_events(limit: int = Query(100, ge=1, le=500),
-                   kind: str | None = None, hours: int | None = None):
+                   kind: Optional[str] = None, hours: Optional[int] = None):
     return {"events": history.events(limit=limit, kind=kind, since_hours=hours)}
 
 
@@ -296,6 +303,140 @@ def history_growth(hours: int = Query(168, ge=24, le=2160)):
         if vol.get("ok") and vol.get("label"):
             out[vol["label"]] = history.growth(f"vol:{vol['label']}", hours)
     return {"hours": hours, "volumes": out}
+
+
+# ---------- 安全中心 ----------
+
+@app.get("/api/security/overview")
+def security_overview(hours: int = Query(168, ge=1, le=2160),
+                      limit: int = Query(100, ge=1, le=500)):
+    sections = store.snapshot().get("sections") or {}
+    return {
+        "coverage": security_center.coverage(sections),
+        "incidents": security_center.incidents(sections, hours, limit),
+        "appsec": security_center.appsec(sections),
+        "changes": history.security_changes(50),
+        "write_enabled": FIREWALL_ENABLED,
+    }
+
+
+@app.patch("/api/security/incidents/{key:path}")
+def security_incident_update(key: str, request: Request, payload: dict = Body(...),
+                             x_panel_token: Optional[str] = Header(default=None)):
+    _guard(request, x_panel_token, "更新安全事件")
+    try:
+        result = security_center.incident_update(
+            key, str(payload.get("status") or "open"),
+            str(payload.get("note") or ""), bool(payload.get("false_positive", False)))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    history.record_event("security", "info", f"incident:{key}",
+                         f"安全事件更新为 {result['status']}", result.get("note"))
+    return {"ok": True, "key": key, **result}
+
+
+@app.get("/api/security/cti/{ip}")
+def security_cti(ip: str):
+    try:
+        return security_center.cti(ip)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except Exception as exc:  # noqa: BLE001  外部情报失败不暴露堆栈/密钥
+        raise HTTPException(status_code=502, detail=f"CTI 查询失败: {str(exc)[:160]}") from None
+
+
+@app.post("/api/security/changes/ban")
+async def security_safe_ban(request: Request, payload: dict = Body(...),
+                            x_panel_token: Optional[str] = Header(default=None)):
+    """带基线、留痕和自动回滚的临时封禁。
+
+    它复用已有 CrowdSec LAPI，不直接改 iptables。操作后只重采现有探针；如果
+    原本正常的服务或节点变坏，立即撤销本次封禁。
+    """
+    if not FIREWALL_ENABLED:
+        raise HTTPException(status_code=403, detail="防火墙写操作已禁用")
+    _guard(request, x_panel_token, "安全变更")
+    target = str(payload.get("ip") or "").strip()
+    duration = str(payload.get("duration") or "4h")
+    reason = str(payload.get("reason") or "安全中心临时封禁")[:200]
+    try:
+        target, _scope = lapi.validate(target)
+    except FirewallError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    sections = store.snapshot().get("sections") or {}
+    current = ((sections.get("crowdsec") or {}).get("data") or {}).get("decisions") or []
+    if any(x.get("ip") == target for x in current):
+        raise HTTPException(status_code=400, detail=f"{target} 已在封禁列表中，本次未改动")
+    before = security_center.preflight(sections)
+    change_id = uuid.uuid4().hex
+    change = {"id": change_id, "kind": "crowdsec", "target": target,
+              "action": "ban", "status": "pending", "before": before,
+              "ts": int(time.time()), "detail": reason}
+    try:
+        history.security_change_add(change)
+        result = lapi.ban(target, duration, reason)
+    except (FirewallError, RuntimeError) as exc:
+        history.security_change_update(change_id, "failed", detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    expires_at = None
+    try:
+        expires_at = int(datetime.fromisoformat(result["until"]).timestamp())
+    except (KeyError, TypeError, ValueError):
+        pass
+    history.security_change_update(change_id, "applied", after=result,
+                                   detail=f"{reason}；到期 {result.get('until') or '?'}")
+    history.security_change_expiry(change_id, expires_at)
+    await store.refresh("crowdsec")
+    for name in ("services", "nodes"):
+        await store.refresh(name)
+    after_sections = store.snapshot().get("sections") or {}
+    regressions = security_center.regressions(before, after_sections)
+    if regressions:
+        try:
+            rolled = lapi.unban(result["ip"])
+            await store.refresh("crowdsec")
+            history.security_change_update(
+                change_id, "auto_rolled_back", after=rolled,
+                detail="；".join(regressions))
+        except FirewallError as exc:
+            history.security_change_update(
+                change_id, "rollback_failed", detail="；".join(regressions) + f"；{exc}")
+        raise HTTPException(status_code=409,
+                            detail="健康检查发现回归，已尝试自动回滚：" + "；".join(regressions))
+    history.record_event("security-change", "warn", f"security-ban:{change_id}",
+                         f"安全中心临时封禁 {result['ip']}",
+                         f"{result['duration_label']}；{reason}")
+    return {"ok": True, "change_id": change_id, "result": result,
+            "preflight": before, "regressions": []}
+
+
+@app.post("/api/security/changes/{change_id}/rollback")
+async def security_change_rollback(change_id: str, request: Request,
+                                   x_panel_token: Optional[str] = Header(default=None)):
+    _guard(request, x_panel_token, "回滚安全变更")
+    change = history.security_change(change_id)
+    if not change:
+        raise HTTPException(status_code=404, detail="找不到这条安全变更")
+    if change.get("action") != "ban" or change.get("status") != "applied":
+        raise HTTPException(status_code=400, detail="这条变更当前不可回滚")
+    try:
+        result = lapi.unban(change["target"])
+    except FirewallError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    history.security_change_update(change_id, "rolled_back", after=result,
+                                   detail="用户从安全中心回滚")
+    rollback_id = uuid.uuid4().hex
+    history.security_change_add({
+        "id": rollback_id, "kind": "crowdsec", "target": change["target"],
+        "action": "unban", "status": "applied", "rollback_of": change_id,
+        "before": change, "after": result, "detail": "回滚临时封禁",
+    })
+    await store.refresh("crowdsec")
+    history.record_event("security-change", "info", f"security-rollback:{change_id}",
+                         f"已回滚封禁 {change['target']}", None)
+    return {"ok": True, "change_id": change_id, "rollback_id": rollback_id,
+            "result": result}
 
 
 # ---------- 防火墙 ----------
@@ -343,7 +484,7 @@ def whitelist_list():
 
 @app.post("/api/firewall/whitelist")
 async def whitelist_add(request: Request, payload: dict = Body(...),
-                        x_panel_token: str | None = Header(default=None)):
+                        x_panel_token: Optional[str] = Header(default=None)):
     _guard(request, x_panel_token, "加白名单")
     try:
         result = whitelist.add(payload.get("ip"), payload.get("note") or "")
@@ -362,7 +503,7 @@ async def whitelist_add(request: Request, payload: dict = Body(...),
 
 @app.delete("/api/firewall/whitelist/{ip:path}")
 def whitelist_remove(ip: str, request: Request,
-                     x_panel_token: str | None = Header(default=None)):
+                     x_panel_token: Optional[str] = Header(default=None)):
     _guard(request, x_panel_token, "移除白名单")
     try:
         result = whitelist.remove(ip)
@@ -376,7 +517,7 @@ def whitelist_remove(ip: str, request: Request,
 
 @app.post("/api/firewall/ban")
 async def firewall_ban(request: Request, payload: dict = Body(...),
-                       x_panel_token: str | None = Header(default=None)):
+                       x_panel_token: Optional[str] = Header(default=None)):
     if not FIREWALL_ENABLED:
         raise HTTPException(status_code=403, detail="防火墙写操作已在 config.yaml 中禁用")
     _guard(request, x_panel_token, "封禁")
@@ -395,7 +536,7 @@ async def firewall_ban(request: Request, payload: dict = Body(...),
 
 @app.post("/api/firewall/unban")
 async def firewall_unban(request: Request, payload: dict = Body(...),
-                         x_panel_token: str | None = Header(default=None)):
+                         x_panel_token: Optional[str] = Header(default=None)):
     if not FIREWALL_ENABLED:
         raise HTTPException(status_code=403, detail="防火墙写操作已在 config.yaml 中禁用")
     _guard(request, x_panel_token, "解封")
@@ -414,7 +555,7 @@ async def firewall_unban(request: Request, payload: dict = Body(...),
 
 @app.post("/api/containers/{name}/{action}")
 async def container_action(name: str, action: str, request: Request,
-                           x_panel_token: str | None = Header(default=None)):
+                           x_panel_token: Optional[str] = Header(default=None)):
     _guard(request, x_panel_token, f"容器{action}")
     try:
         result = actions.container(name, action)
@@ -449,7 +590,7 @@ def snapshots(keep: int = Query(10, ge=1, le=200)):
 
 @app.get("/api/audit")
 def audit_log(limit: int = Query(200, ge=1, le=1000),
-              hours: int | None = None, failed: bool = False):
+              hours: Optional[int] = None, failed: bool = False):
     return {"items": history.audit(limit=limit, hours=hours, only_failed=failed),
             "summary": history.audit_summary(hours or 168)}
 
@@ -466,7 +607,7 @@ def alerts_settings():
 
 @app.put("/api/alerts/settings")
 def alerts_settings_update(request: Request, payload: dict = Body(...),
-                           x_panel_token: str | None = Header(default=None)):
+                           x_panel_token: Optional[str] = Header(default=None)):
     _guard(request, x_panel_token, "改告警规则")
     try:
         alert_engine.update_rules(payload.get("rules") or {},
@@ -480,7 +621,7 @@ def alerts_settings_update(request: Request, payload: dict = Body(...),
 
 @app.post("/api/alerts/mute")
 def alerts_mute(request: Request, payload: dict = Body(...),
-                x_panel_token: str | None = Header(default=None)):
+                x_panel_token: Optional[str] = Header(default=None)):
     """忽略某条告警。硬盘服役年限这类不会自愈的告警，提醒一次就够了"""
     _guard(request, x_panel_token, "忽略告警")
     key = (payload.get("key") or "").strip()
@@ -498,7 +639,7 @@ def alerts_mute(request: Request, payload: dict = Body(...),
 
 @app.delete("/api/alerts/mute/{key:path}")
 def alerts_unmute(key: str, request: Request,
-                  x_panel_token: str | None = Header(default=None)):
+                  x_panel_token: Optional[str] = Header(default=None)):
     _guard(request, x_panel_token, "恢复告警")
     if not alert_engine.unmute(key):
         raise HTTPException(status_code=400, detail=f"{key} 不在忽略列表")
@@ -507,7 +648,7 @@ def alerts_unmute(key: str, request: Request,
 
 
 @app.post("/api/alerts/test")
-def alerts_test(request: Request, x_panel_token: str | None = Header(default=None)):
+def alerts_test(request: Request, x_panel_token: Optional[str] = Header(default=None)):
     """发一条测试推送，验证 Server 酱配置是否正确"""
     _guard(request, x_panel_token, "测试推送")
     if not notifier.enabled:

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Homelab</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v=0.5.0-1">
 </head>
 <body>
 <div class="wrap">
@@ -16,6 +16,7 @@
     <nav>
       <button class="on" data-tab="overview">总览</button>
       <button data-tab="firewall">防火墙</button>
+      <button data-tab="security">安全中心</button>
       <button data-tab="conns">连接</button>
       <button data-tab="ports">端口</button>
       <button data-tab="history">历史</button>
@@ -95,6 +96,34 @@
         <div class="scroll" id="fwList"></div>
       </div>
     </div>
+  </div>
+
+  <!-- 安全中心：聚合现有端口、节点、CrowdSec 与 1Panel WAF，不替代各自管理面 -->
+  <div id="security" class="hide">
+    <div class="callout" id="secMode">
+      <b>安全模式</b>　默认只读观察。临时封禁走 CrowdSec，带健康检查、流水和回滚；
+      不直接改 iptables，也不修改 1Panel WAF。
+    </div>
+    <div class="filters">
+      <button class="chip" data-sec-range="24">24 小时</button>
+      <button class="chip on" data-sec-range="168">7 天</button>
+      <button class="chip" data-sec-range="720">30 天</button>
+      <button class="btn sm ghost" id="secRefresh">立即核查</button>
+      <span class="note" id="secUpdated" style="margin:0"></span>
+    </div>
+    <div class="grid cols4">
+      <div class="card flat" id="secCoverage"></div>
+      <div class="card flat span2" id="secPipeline"></div>
+      <div class="card flat" id="secAppsec"></div>
+    </div>
+    <div class="section"><h3>覆盖缺口</h3><i class="rule"></i></div>
+    <div class="card flat"><div class="scroll" id="secIssues"></div></div>
+    <div class="section"><h3>事件中心</h3><i class="rule"></i>
+      <span class="meta">按攻击源跨机器聚合</span></div>
+    <div class="card flat"><div class="scroll tall" id="secIncidents"></div></div>
+    <div class="section"><h3>安全变更</h3><i class="rule"></i>
+      <span class="meta">仅显示由本面板发起的变更</span></div>
+    <div class="card flat"><div class="scroll" id="secChanges"></div></div>
   </div>
 
   <!-- 连接 -->
@@ -243,6 +272,6 @@
   </form>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=0.5.0"></script>
 </body>
 </html>

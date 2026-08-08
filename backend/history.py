@@ -66,6 +66,41 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- 安全事件的人工处置状态。原始告警仍来自 CrowdSec/WAF，这里只存人的判断，
+-- 避免采集刷新后“已处理、误报、备注”等信息丢失。
+CREATE TABLE IF NOT EXISTS incident_annotations (
+    incident_key  TEXT PRIMARY KEY,
+    status        TEXT NOT NULL DEFAULT 'open',
+    note          TEXT,
+    false_positive INTEGER NOT NULL DEFAULT 0,
+    updated_at    INTEGER NOT NULL
+);
+
+-- 面板发起的安全变更流水。当前只允许可到期、可回滚的 CrowdSec 临时封禁，
+-- 不提供任意 iptables 编辑器，避免绕过现有 HOMEGUARD/CrowdSec 管理面。
+CREATE TABLE IF NOT EXISTS security_changes (
+    id          TEXT PRIMARY KEY,
+    ts          INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    expires_at  INTEGER,
+    before_json TEXT,
+    after_json  TEXT,
+    rollback_of TEXT,
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_security_changes_ts ON security_changes(ts DESC);
+
+-- CrowdSec CTI 是外部可选能力，按 IP 缓存，没配 key 时完全不访问外网。
+CREATE TABLE IF NOT EXISTS cti_cache (
+    ip         TEXT PRIMARY KEY,
+    fetched_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    data_json  TEXT NOT NULL
+);
 """
 
 # 采样间隔。指标本身采得比这密，但落盘按这个节流
@@ -311,6 +346,136 @@ class History:
             return 0
         with self._connect() as conn:
             return conn.execute("DELETE FROM settings WHERE key=?", (key,)).rowcount
+
+    # ---------- 安全中心 ----------
+
+    def incident_annotations(self, keys=None):
+        if not self._ready:
+            return {}
+        sql = ("SELECT incident_key,status,note,false_positive,updated_at "
+               "FROM incident_annotations")
+        args = []
+        if keys:
+            keys = list(dict.fromkeys(keys))[:500]
+            sql += " WHERE incident_key IN (%s)" % ",".join("?" for _ in keys)
+            args.extend(keys)
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(sql, args).fetchall()
+        except sqlite3.Error:
+            return {}
+        return {r[0]: {"status": r[1], "note": r[2],
+                       "false_positive": bool(r[3]), "updated_at": r[4]}
+                for r in rows}
+
+    def incident_update(self, key, status="open", note="", false_positive=False):
+        if not self._ready:
+            raise RuntimeError("历史库未启用，事件处置状态无法持久化")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO incident_annotations"
+                "(incident_key,status,note,false_positive,updated_at) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(incident_key) DO UPDATE SET status=excluded.status,"
+                " note=excluded.note,false_positive=excluded.false_positive,"
+                " updated_at=excluded.updated_at",
+                (key, status, note[:1000], int(bool(false_positive)), int(time.time())))
+        return self.incident_annotations([key]).get(key)
+
+    def security_change_add(self, change):
+        if not self._ready:
+            raise RuntimeError("历史库未启用，安全变更无法留痕")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO security_changes"
+                "(id,ts,kind,target,action,status,expires_at,before_json,after_json,"
+                "rollback_of,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (change["id"], change.get("ts", int(time.time())), change["kind"],
+                 change["target"], change["action"], change["status"],
+                 change.get("expires_at"),
+                 json.dumps(change.get("before"), ensure_ascii=False),
+                 json.dumps(change.get("after"), ensure_ascii=False),
+                 change.get("rollback_of"), change.get("detail")))
+
+    def security_change_update(self, change_id, status, after=None, detail=None):
+        if not self._ready:
+            return 0
+        fields, args = ["status=?"], [status]
+        if after is not None:
+            fields.append("after_json=?")
+            args.append(json.dumps(after, ensure_ascii=False))
+        if detail is not None:
+            fields.append("detail=?")
+            args.append(str(detail)[:1000])
+        args.append(change_id)
+        with self._connect() as conn:
+            return conn.execute(
+                f"UPDATE security_changes SET {','.join(fields)} WHERE id=?", args
+            ).rowcount
+
+    def security_change_expiry(self, change_id, expires_at):
+        if not self._ready:
+            return 0
+        with self._connect() as conn:
+            return conn.execute(
+                "UPDATE security_changes SET expires_at=? WHERE id=?",
+                (expires_at, change_id)).rowcount
+
+    def security_changes(self, limit=100):
+        if not self._ready:
+            return []
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT id,ts,kind,target,action,status,expires_at,before_json,"
+                    "after_json,rollback_of,detail FROM security_changes "
+                    "ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        out = []
+        for r in rows:
+            def decoded(value):
+                try:
+                    return json.loads(value) if value else None
+                except (TypeError, ValueError):
+                    return None
+            out.append({"id": r[0], "ts": r[1], "kind": r[2], "target": r[3],
+                        "action": r[4], "status": r[5], "expires_at": r[6],
+                        "before": decoded(r[7]), "after": decoded(r[8]),
+                        "rollback_of": r[9], "detail": r[10]})
+        return out
+
+    def security_change(self, change_id):
+        rows = [x for x in self.security_changes(500) if x["id"] == change_id]
+        return rows[0] if rows else None
+
+    def cti_get(self, ip):
+        if not self._ready:
+            return None
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT fetched_at,expires_at,data_json FROM cti_cache WHERE ip=?",
+                    (ip,)).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row or row[1] <= int(time.time()):
+            return None
+        try:
+            return {"fetched_at": row[0], "expires_at": row[1],
+                    "data": json.loads(row[2]), "cached": True}
+        except (TypeError, ValueError):
+            return None
+
+    def cti_put(self, ip, data, ttl=21600):
+        if not self._ready:
+            return
+        now = int(time.time())
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO cti_cache(ip,fetched_at,expires_at,data_json) VALUES(?,?,?,?)"
+                " ON CONFLICT(ip) DO UPDATE SET fetched_at=excluded.fetched_at,"
+                " expires_at=excluded.expires_at,data_json=excluded.data_json",
+                (ip, now, now + ttl, json.dumps(data, ensure_ascii=False)))
 
     # ---------- 访问审计 ----------
 

@@ -6,3 +6,6 @@ services:
     volumes:
       # - /mnt/data:/mnt/data:ro
       # - /root/.ssh/id_remote:/root/.ssh/id_remote:ro
+      # 1Panel OpenResty WAF 只读观察。不存在就不要启用这行，Docker 会把
+      # 不存在的宿主机目录创建出来，反而让面板误以为已挂载。
+      # - /opt/1panel/apps/openresty/openresty/1pwaf/data:/app/security/1panel-waf:ro

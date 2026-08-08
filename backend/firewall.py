@@ -159,8 +159,12 @@ class LapiClient:
 
     # ---------- 操作 ----------
 
+    def validate(self, value):
+        """只校验并规范化目标，不产生任何防火墙变更。"""
+        return _validate_target(value, self.protected)
+
     def ban(self, value, duration="4h", reason=""):
-        target, scope = _validate_target(value, self.protected)
+        target, scope = self.validate(value)
         delta, api_duration = _parse_duration(duration)
 
         # 演示模式：校验照走（受保护网段依然封不了，这本身就是要展示的行为），

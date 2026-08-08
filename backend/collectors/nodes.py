@@ -220,6 +220,7 @@ def _collect_one(ncfg):
     sec = _sections(out.stdout)
     meta = _kv(sec.get("META", []))
     cs = _kv(sec.get("CROWDSEC", []))
+    appsec = _kv(sec.get("APPSEC", []))
     node = {
         "name": name, "ok": True, "latency_ms": elapsed,
         "hostname": meta.get("hostname"),
@@ -231,9 +232,21 @@ def _collect_one(ncfg):
         "services": _kv(sec.get("SERVICES", [])),
         "crowdsec": {
             "ipset_entries": int(cs["ipset_entries"]) if cs.get("ipset_entries", "").isdigit() else None,
+            "blocked_packets": int(cs["blocked_packets"]) if cs.get("blocked_packets", "").isdigit() else None,
+            "blocked_bytes": int(cs["blocked_bytes"]) if cs.get("blocked_bytes", "").isdigit() else None,
             "agent": cs.get("agent"),
             "bouncer": cs.get("bouncer"),
         } if cs else None,
+        "appsec": {
+            "adapter": appsec.get("adapter"),
+            "available": appsec.get("available") == "true",
+            "site_count": int(appsec["site_count"]) if appsec.get("site_count", "").isdigit() else None,
+            "request_rows": int(appsec["request_rows"]) if appsec.get("request_rows", "").isdigit() else None,
+            "attack_rows": int(appsec["attack_rows"]) if appsec.get("attack_rows", "").isdigit() else None,
+            "blocked_rows": int(appsec["blocked_rows"]) if appsec.get("blocked_rows", "").isdigit() else None,
+            "capabilities": {k: appsec.get(k) == "true" for k in
+                             ("waf", "rate_limit", "bot", "geo", "allow_deny")},
+        } if appsec else None,
     }
     node.update(_parse_host(sec.get("HOST", [])))
     # 节点时钟偏差会让"最后采集于"这类显示变得莫名其妙，顺手量一下

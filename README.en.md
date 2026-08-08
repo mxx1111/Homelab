@@ -94,6 +94,7 @@ now".
 |---|---|
 | **Overview** | Security posture, managed nodes, storage, host load, network, service health, port exposure, containers, drives, certificates |
 | **Firewall** | Ban list (manual / detected / community blocklist), top attack sources, country and ASN breakdown, allowlist, one-click ban and unban |
+| **Security Center** | Exposure gaps, enforcement pipeline, cross-node incident handling, optional CTI, read-only 1Panel WAF visibility, and reversible temporary bans |
 | **Connections** | Who is connected right now, with GeoIP attribution, human-readable TCP states, grouped by service port |
 | **Ports** | Every listening port, graded as public / LAN-reachable / localhost-only |
 | **History** | Trend charts, event timeline, operation audit, capacity forecast, sampling health |

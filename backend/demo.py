@@ -462,7 +462,16 @@ def nodes(cfg):
                                  "proc": n} for p, n in
                                 [(22, "sshd"), (80, "nginx"), (443, "nginx")]]},
             "crowdsec": {"ipset_entries": spec["bans"] + i,
+                         "blocked_packets": 4280 + i * 1730,
+                         "blocked_bytes": 2380000 + i * 940000,
                          "agent": "active", "bouncer": "active"},
+            "appsec": ({"adapter": "onepanel", "available": True,
+                        "site_count": 12, "request_rows": 1364,
+                        "attack_rows": 0, "blocked_rows": 0,
+                        "capabilities": {"waf": True, "rate_limit": True,
+                                         "bot": True, "geo": False,
+                                         "allow_deny": True}}
+                       if i == 0 else {"available": False}),
             "services": {"ssh": "active", "docker": "active",
                          "crowdsec": "active",
                          "crowdsec-firewall-bouncer": "active"},
