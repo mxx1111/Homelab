@@ -54,7 +54,7 @@ def _complete_china_place(subdivision_name, city_name):
     else:
         subdivision = _AUTONOMOUS_REGIONS.get(subdivision, subdivision)
     if (city and city not in ("北京", "上海", "天津", "重庆") and
-            not city.endswith(("市", "州", "盟", "地区", "县", "区", "旗"))):
+            not city.endswith(("市", "自治州", "盟", "地区", "县", "区", "旗"))):
         city += "市"
     elif city in ("北京", "上海", "天津", "重庆"):
         city += "市"
