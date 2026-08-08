@@ -2097,13 +2097,15 @@ function compactMapText(value, maxLength=28) {
 
 function addAttackMarker(row, label, detail="") {
   const r = Math.min(18, 5 + Math.log2(row.events + 1) * 2.1);
+  const blockedText = row.blocked ? `${row.blocked} 个当前封禁` : "当前无封禁";
   L.circleMarker([row.lat, row.lon], {
     radius:r, color:row.blocked ? "#BC4C3C" : "#FFFFFF",
     weight:row.blocked ? 3 : 2, fillColor:"#D97757", fillOpacity:.76,
-  }).bindTooltip(`<b>${esc(label)}</b><br>${row.sources} 个攻击源 · ${row.events} 个事件` +
-    (detail ? `<br><span class="map-provider">${esc(detail)}</span>` : "") +
-    `<br>${row.blocked ? row.blocked + " 个当前封禁" : "当前无封禁"}`,
-    {direction:"top"}).addTo(secMarkerLayer);
+  }).bindTooltip(`<div class="map-tip-head">${esc(label)}</div>` +
+    `<div class="map-tip-counts"><span>${row.sources} 个攻击源</span><span>${row.events} 个事件</span></div>` +
+    (detail ? `<div class="map-provider">${esc(detail)}</div>` : "") +
+    `<div class="map-tip-status ${row.blocked ? "blocked" : "clear"}"><i></i>${blockedText}</div>`,
+    {direction:"auto", offset:[10,0], opacity:1, className:"attack-tooltip"}).addTo(secMarkerLayer);
 }
 
 function renderMapRank(rows, emptyText) {
