@@ -241,6 +241,15 @@ class SecurityCenter:
             {"stage": "hit", "label": "节点拦截包", "value": hit_packets},
         ]
         issues.sort(key=lambda x: (_severity_rank(x["level"]), x["machine"], x["title"]))
+        unique_issues = []
+        seen_issues = set()
+        for item in issues:
+            key = (item["code"], item["machine"], str(item.get("target")))
+            if key in seen_issues:
+                continue
+            seen_issues.add(key)
+            unique_issues.append(item)
+        issues = unique_issues
         return {"enabled": self.enabled, "status": enforcement, "assets": assets,
                 "issues": issues, "counts": {
                     "assets": len(assets), "crit": sum(x["level"] == "crit" for x in issues),
