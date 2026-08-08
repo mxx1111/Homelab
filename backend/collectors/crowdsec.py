@@ -269,12 +269,17 @@ def _alerts_db(cfg, limit=200):
     path = (cfg.get("crowdsec") or {}).get("db_path", DEFAULT_DB)
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
     try:
+        # CrowdSec 新版 alerts 表带 GeoLite2-City 的经纬度。旧版库没有这两列，
+        # 用 NULL 兼容，避免为了地图把整个告警采集器弄挂。
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(alerts)")}
+        lat_col = "a.source_latitude" if "source_latitude" in columns else "NULL"
+        lon_col = "a.source_longitude" if "source_longitude" in columns else "NULL"
         # 关联 machines 是为了知道这条告警是哪台机器检出的。多机接入同一个
         # 中央 LAPI 后，所有节点的告警都落在这一张表里，不带来源就分不清
         # "谁在被打"
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT a.id, a.created_at, a.scenario, a.source_ip, a.source_country,
-                   a.source_as_name, a.events_count, m.machine_id
+                   a.source_as_name, a.events_count, {lat_col}, {lon_col}, m.machine_id
             FROM alerts a LEFT JOIN machines m ON a.machine_alerts = m.id
             WHERE a.source_ip IS NOT NULL AND a.source_ip != ''
             ORDER BY a.id DESC LIMIT ?
@@ -287,7 +292,8 @@ def _alerts_db(cfg, limit=200):
         items.append({"id": r[0], "created_at": r[1], "scenario": r[2],
                       "scenario_cn": scenario_cn(r[2]),
                       "ip": r[3], "country": r[4], "as_name": r[5],
-                      "events_count": r[6], "machine": _machine_label(r[7]),
+                      "events_count": r[6], "latitude": r[7], "longitude": r[8],
+                      "machine": _machine_label(r[9]),
                       "age_hours": round(age, 2) if age is not None else None})
     return items
 
@@ -310,6 +316,8 @@ def _alerts_cscli(limit=200):
                       "scenario_cn": scenario_cn(a.get("scenario")),
                       "ip": src.get("value"),
                       "country": src.get("cn"), "as_name": src.get("as_name"),
+                      "latitude": src.get("latitude"),
+                      "longitude": src.get("longitude"),
                       "events_count": a.get("events_count"),
                       "machine": _machine_label(a.get("machine_id")),
                       "age_hours": round(age, 2) if age is not None else None})

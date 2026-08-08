@@ -357,24 +357,28 @@ select{cursor:pointer; appearance:none; padding-right:30px;
              text-overflow:ellipsis; white-space:nowrap}
 @media(max-width:900px){.secpipe{grid-template-columns:repeat(2,minmax(120px,1fr))}}
 
-/* 国家级攻击态势图。底图与国家中心点都随前端静态文件发布，页面不加载地图瓦片，
-   也不会把攻击 IP 交给第三方。轮廓只承担方位参照，数据点才是主角。 */
+/* Leaflet 交互地图。瓦片只提供底图，攻击数据以浏览器本地图层叠加；
+   不把攻击 IP 拼进瓦片 URL，也不调用外部地理编码接口。 */
 .secmap-card{padding-bottom:14px}
+.secmap-toolbar{display:flex; align-items:center; justify-content:space-between;
+                gap:12px; margin:-4px 0 12px; flex-wrap:wrap}
+.secmap-toolbar .note{margin:0}
+.map-switch{display:flex; gap:5px; padding:3px; border:1px solid var(--border);
+            border-radius:20px; background:var(--card-alt)}
+.map-switch .chip{border-color:transparent; padding:6px 13px}
 .secmap-layout{display:grid; grid-template-columns:minmax(0,2.2fr) minmax(250px,.8fr);
                gap:22px; align-items:start}
 .secmap{height:clamp(270px,28vw,420px); border:1px solid var(--border); border-radius:var(--radius-sm);
-        background:var(--card-alt); overflow:hidden; position:relative}
-.secmap svg{display:block; width:100%; height:100%}
-.secmap .map-grid{stroke:var(--border); stroke-width:1; stroke-dasharray:3 5}
-.secmap .land{fill:var(--card); stroke:var(--border-strong); stroke-width:1.1;
-              vector-effect:non-scaling-stroke}
-.secmap .ocean-label{fill:var(--faint); font:10px var(--sans); letter-spacing:.08em}
-.secmap .attack{fill:var(--accent); fill-opacity:.74; stroke:var(--card); stroke-width:2;
-                vector-effect:non-scaling-stroke}
-.secmap .attack.blocked{stroke:var(--crit); stroke-width:3}
-.secmap .attack:hover{fill-opacity:1; stroke-width:4}
+        background:#DDE7EC; overflow:hidden; position:relative; z-index:0}
+.secmap.leaflet-container{font-family:var(--sans)}
+.secmap .leaflet-control-zoom a{color:#343330; background:rgba(255,255,255,.94)}
+.secmap .leaflet-control-attribution{font-size:10px; background:rgba(255,255,255,.84)}
+.secmap .leaflet-control-attribution a{color:#4D6D80}
+.secmap .leaflet-tooltip{font:12px/1.5 var(--sans); color:#242321;
+                         border:1px solid #D5D1C6; box-shadow:0 2px 8px rgba(0,0,0,.12)}
 .secmap-empty{position:absolute; inset:0; display:grid; place-items:center;
-              color:var(--faint); font-size:13px; pointer-events:none}
+              color:var(--dim); font-size:13px; pointer-events:none; z-index:500;
+              background:rgba(240,238,230,.72)}
 .secmap-rank{display:flex; flex-direction:column; min-width:0}
 .secmap-legend{display:flex; align-items:center; flex-wrap:wrap; gap:8px 15px;
                color:var(--dim); font-size:11.5px; margin-bottom:9px}
@@ -394,6 +398,7 @@ select{cursor:pointer; appearance:none; padding-right:30px;
 @media(max-width:640px){
   .secmap{height:220px}
   .secmap-rank{display:block}
+  .secmap-toolbar{align-items:flex-start}
 }
 
 /* ---------- 告警条 ---------- */

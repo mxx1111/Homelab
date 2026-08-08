@@ -88,6 +88,19 @@ ATTACKERS = [
      ["crowdsecurity/ssh-bf"]),
 ]
 
+# 演示地图使用的固定 GeoLite2 风格坐标（纬度, 经度）。真实部署直接读取
+# CrowdSec alerts.source_latitude/source_longitude，不走这里。
+ATTACKER_GEO = {
+    "45.132.193.87": (59.93, 30.31),
+    "103.149.28.51": (21.03, 105.85),
+    "185.243.96.114": (52.37, 4.90),
+    "222.186.30.76": (32.06, 118.80),
+    "92.63.197.153": (55.75, 37.62),
+    "167.94.138.20": (42.28, -83.74),
+    "20.65.193.42": (37.43, -78.66),
+    "139.59.42.118": (12.97, 77.59),
+}
+
 CONTAINERS = [
     ("nginx-proxy", True, 0.8, 42),
     ("nextcloud", True, 3.2, 512),
@@ -258,6 +271,8 @@ def crowdsec(cfg):
             age = 0.4 + k * 1.7 + ATTACKERS.index((ip, cc, asn, _cn, count, scen)) * 2.2
             alerts.append({"id": aid, "created_at": None, "scenario": s,
                            "ip": ip, "country": cc, "as_name": asn,
+                           "latitude": ATTACKER_GEO[ip][0],
+                           "longitude": ATTACKER_GEO[ip][1],
                            "events_count": max(3, count // (k + 2)),
                            "age_hours": round(age, 2)})
     alerts.sort(key=lambda a: a["age_hours"])

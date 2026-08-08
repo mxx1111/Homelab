@@ -133,6 +133,7 @@ class SecurityCenter:
         self.enabled = bool(scfg.get("enabled", True))
         self.cti_key = os.environ.get("HOMELAB_CROWDSEC_CTI_KEY") or ""
         self.cti_ttl = int((scfg.get("cti") or {}).get("cache_seconds", 21600))
+        self.map_cfg = scfg.get("map") or {}
         self.onepanel = OnePanelWafAdapter(cfg)
         self.appsec_adapter = CrowdSecAppSecAdapter(cfg)
         self.sensitive_ports = dict(DANGEROUS_PORTS)
@@ -149,6 +150,20 @@ class SecurityCenter:
                 self.sensitive_ports[int(port)] = label.strip() or f"敏感服务 {port}"
             except ValueError:
                 continue
+
+    def map_options(self):
+        """前端底图配置。攻击点不发给瓦片服务，只在浏览器本地叠加。"""
+        try:
+            max_zoom = max(3, min(19, int(self.map_cfg.get("max_zoom", 12))))
+        except (TypeError, ValueError):
+            max_zoom = 12
+        return {
+            "tile_url": str(self.map_cfg.get("tile_url") or
+                            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+            "attribution": str(self.map_cfg.get("attribution") or
+                               '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'),
+            "max_zoom": max_zoom,
+        }
 
     def coverage(self, sections):
         ports = _data(sections, "ports")
@@ -270,7 +285,9 @@ class SecurityCenter:
             key = f"crowdsec:{alert['ip']}"
             slot = grouped[key]
             slot.update({"key": key, "ip": alert["ip"], "country": alert.get("country"),
-                         "as_name": alert.get("as_name")})
+                         "as_name": alert.get("as_name"),
+                         "latitude": alert.get("latitude"),
+                         "longitude": alert.get("longitude")})
             slot["count"] += 1
             slot["event_count"] += int(alert.get("events_count") or 0)
             slot["first_age_hours"] = max(slot["first_age_hours"], age)

@@ -315,6 +315,7 @@ def security_overview(hours: int = Query(168, ge=1, le=2160),
         "coverage": security_center.coverage(sections),
         "incidents": security_center.incidents(sections, hours, limit),
         "appsec": security_center.appsec(sections),
+        "map": security_center.map_options(),
         "changes": history.security_changes(50),
         "write_enabled": FIREWALL_ENABLED,
     }

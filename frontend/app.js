@@ -43,8 +43,8 @@ const COUNTRY = {
   MN:"蒙古", BN:"文莱", MV:"马尔代夫", AF:"阿富汗", SY:"叙利亚",
 };
 
-/* 国家标签点来自 Natural Earth 1:50m Admin 0 Countries（公共领域），只在
-   本地把 ISO 两位码投影到静态 SVG。地图运行时没有外部请求，也不处理 IP。 */
+/* 国家标签点来自 Natural Earth 1:50m Admin 0 Countries（公共领域）。仅当
+   旧版 CrowdSec 没有经纬度字段时，作为 Leaflet 国家聚合点的降级坐标。 */
 const COUNTRY_POINT = {
   AD:[1.54,42.55],AE:[54.55,23.47],AF:[66.5,34.16],AG:[-61.79,17.35],AI:[-63.03,18.24],
   AL:[20.11,40.65],AM:[44.8,40.46],AO:[17.98,-12.18],AQ:[35.89,-79.84],AR:[-64.17,-33.5],
@@ -2039,72 +2039,157 @@ async function loadMeta() {
 
 let secRange = 168, secData = null, secLoadedAt = 0, secLoading = false;
 let secBanConfirm = null, secRollbackConfirm = null;
+let secMapMode = "world", secLeaflet = null, secMarkerLayer = null;
+let secMapRenderedMode = null;
 
 const secStatusName = s => ({open:"待处理", investigating:"调查中",
   resolved:"已处理", ignored:"已忽略"}[s] || s || "待处理");
 const secChangeName = s => ({pending:"执行中", applied:"已生效", failed:"失败",
   rolled_back:"已回滚", auto_rolled_back:"自动回滚", rollback_failed:"回滚失败"}[s] || s);
 
-function renderSecurityMap(incidents) {
-  const byCountry = {};
-  for (const item of incidents || []) {
-    const code = String(item.country || "").trim().toUpperCase();
-    if (!code || code === "??") continue;
-    const slot = byCountry[code] || (byCountry[code] = {
-      code, sources:0, events:0, blocked:0,
-    });
-    slot.sources++;
-    slot.events += Math.max(1, Number(item.event_count || item.count || 1));
-    if (item.blocked) slot.blocked++;
+function ensureSecurityMap(mapCfg) {
+  if (!window.L) {
+    $("secMap").innerHTML = '<div class="secmap-empty">Leaflet 地图组件加载失败，请检查浏览器网络后刷新</div>';
+    return null;
   }
-  const countries = Object.values(byCountry).sort((a,b) => b.events - a.events);
-  const totalSources = countries.reduce((n,x) => n + x.sources, 0);
-  const blockedSources = countries.reduce((n,x) => n + x.blocked, 0);
-  $("secMapMeta").textContent = `${countries.length} 个国家 · ${totalSources} 个攻击源 · ${blockedSources} 个当前封禁`;
+  if (secLeaflet) return secLeaflet;
+  secLeaflet = L.map("secMap", {
+    zoomControl:true, scrollWheelZoom:true, doubleClickZoom:true,
+    touchZoom:true, keyboard:true, minZoom:1,
+    maxZoom:Number(mapCfg?.max_zoom || 12), worldCopyJump:true,
+  });
+  const tileUrl = mapCfg?.tile_url || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  if (tileUrl) {
+    L.tileLayer(tileUrl, {
+      maxZoom:Number(mapCfg?.max_zoom || 12),
+      attribution:mapCfg?.attribution ||
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(secLeaflet);
+  }
+  secMarkerLayer = L.layerGroup().addTo(secLeaflet);
+  L.control.scale({imperial:false, position:"bottomleft"}).addTo(secLeaflet);
+  return secLeaflet;
+}
 
-  const px = lon => (lon + 180) * 2;
-  const py = lat => (90 - Math.max(-90, Math.min(90, lat))) * 1.8333;
-  const points = countries.filter(x => COUNTRY_POINT[x.code]).sort((a,b) => b.events - a.events)
-    .map(x => {
-      const [lon,lat] = COUNTRY_POINT[x.code];
-      const r = Math.min(17, 4.5 + Math.log2(x.events + 1) * 2.15);
-      const tip = `${cname(x.code)}：${x.sources} 个攻击源，${x.events} 个事件，${x.blocked} 个当前封禁`;
-      return `<circle class="attack${x.blocked ? " blocked" : ""}" cx="${px(lon).toFixed(1)}"
-        cy="${py(lat).toFixed(1)}" r="${r.toFixed(1)}"><title>${esc(tip)}</title></circle>`;
-    }).join("");
+function mapEmpty(message) {
+  let el = document.getElementById("secMapEmpty");
+  if (!message) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "secMapEmpty"; el.className = "secmap-empty";
+    $("secMap").appendChild(el);
+  }
+  el.textContent = message;
+}
 
-  /* 简化大陆轮廓仅用于方位参照；攻击点采用上面的真实国家标签坐标。 */
-  $("secMap").innerHTML = `<svg viewBox="0 0 720 330" role="img"
-      aria-label="攻击来源与当前封禁国家分布图" preserveAspectRatio="xMidYMid meet">
-    <g opacity=".75">
-      <path class="map-grid" d="M0 82.5H720M0 165H720M0 247.5H720M180 0V330M360 0V330M540 0V330"/>
-    </g>
-    <g>
-      <path class="land" d="M24 49L58 27 113 34 155 50 185 68 230 79 258 104 240 128 202 126 177 116 150 132 123 157 91 145 69 119 43 101Z"/>
-      <path class="land" d="M248 22L287 17 320 40 307 76 274 83 252 57Z"/>
-      <path class="land" d="M241 145L279 155 311 187 321 220 305 263 286 305 269 273 261 227 245 190 228 164Z"/>
-      <path class="land" d="M337 79L368 65 409 71 432 90 420 111 383 115 352 105 331 91Z"/>
-      <path class="land" d="M345 112L391 105 430 126 453 166 438 211 410 263 377 248 363 207 338 167 326 132Z"/>
-      <path class="land" d="M405 70L458 48 525 45 584 61 637 78 684 112 669 147 625 157 594 179 550 166 518 141 476 137 445 112 416 102Z"/>
-      <path class="land" d="M553 213L594 201 651 221 674 255 646 282 590 279 555 250Z"/>
-      <path class="land" d="M688 275L706 269 716 286 699 303 684 291Z"/>
-    </g>
-    <text class="ocean-label" x="90" y="190">太平洋</text>
-    <text class="ocean-label" x="335" y="154">大西洋</text>
-    <text class="ocean-label" x="500" y="220">印度洋</text>
-    <g>${points}</g>
-  </svg>${countries.length ? "" : '<div class="secmap-empty">所选时间内没有可定位的攻击事件</div>'}`;
+function mapGeo(item) {
+  if (item.latitude === null || item.latitude === undefined || item.latitude === "" ||
+      item.longitude === null || item.longitude === undefined || item.longitude === "") return null;
+  const lat = Number(item.latitude), lon = Number(item.longitude);
+  return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+    ? [lat, lon] : null;
+}
 
-  const maxEvents = Math.max(1, ...countries.map(x => x.events));
+function addAttackMarker(row, label) {
+  const r = Math.min(18, 5 + Math.log2(row.events + 1) * 2.1);
+  L.circleMarker([row.lat, row.lon], {
+    radius:r, color:row.blocked ? "#BC4C3C" : "#FFFFFF",
+    weight:row.blocked ? 3 : 2, fillColor:"#D97757", fillOpacity:.76,
+  }).bindTooltip(`${esc(label)}<br>${row.sources} 个攻击源 · ${row.events} 个事件` +
+    `<br>${row.blocked ? row.blocked + " 个当前封禁" : "当前无封禁"}`,
+    {direction:"top"}).addTo(secMarkerLayer);
+}
+
+function renderMapRank(rows, emptyText) {
+  const maxEvents = Math.max(1, ...rows.map(x => x.events));
   $("secMapRank").innerHTML = `<div class="secmap-legend">
       <span class="map-key"><i class="map-dot"></i>检测到攻击</span>
       <span class="map-key"><i class="map-dot blocked"></i>存在当前封禁</span>
-    </div>${countries.slice(0,8).map((x,i) => `<div class="row">
-      <span class="k"><b style="font-weight:500">${i+1}. ${esc(cname(x.code))}</b>
+    </div>${rows.slice(0,8).map((x,i) => `<div class="row" title="${esc(x.title || x.label)}">
+      <span class="k"><b style="font-weight:500">${i+1}. ${esc(x.label)}</b>
         <span class="tag">${x.sources} 源</span>${x.blocked ? `<span class="tag crit">${x.blocked} 封</span>` : ""}</span>
       <span class="bar"><i class="${x.blocked ? "crit" : ""}" style="width:${Math.max(4,x.events/maxEvents*100).toFixed(1)}%"></i></span>
       <span class="v">${x.events} 事件</span>
-    </div>`).join("") || '<div class="empty center">暂无国家级攻击数据</div>'}`;
+    </div>`).join("") || `<div class="empty center">${esc(emptyText)}</div>`}`;
+}
+
+function renderSecurityMap(incidents, mapCfg={}) {
+  document.querySelectorAll("[data-sec-map]").forEach(x =>
+    x.classList.toggle("on", x.dataset.secMap === secMapMode));
+  const map = ensureSecurityMap(mapCfg);
+  if (!map) return;
+  secMarkerLayer.clearLayers();
+  mapEmpty("");
+
+  if (secMapMode === "china") {
+    const domesticCodes = new Set(["CN","HK","MO","TW"]), regions = {};
+    let domesticSources = 0, blockedSources = 0, unlocated = 0;
+    for (const item of incidents || []) {
+      const code = String(item.country || "").trim().toUpperCase();
+      if (!domesticCodes.has(code)) continue;
+      domesticSources++;
+      if (item.blocked) blockedSources++;
+      const geo = mapGeo(item);
+      if (!geo) { unlocated++; continue; }
+      const lat = Math.round(geo[0] * 2) / 2, lon = Math.round(geo[1] * 2) / 2;
+      const key = `${lat}:${lon}`;
+      const slot = regions[key] || (regions[key] = {
+        lat, lon, sources:0, events:0, blocked:0, providers:new Set(),
+      });
+      slot.sources++;
+      slot.events += Math.max(1, Number(item.event_count || item.count || 1));
+      if (item.blocked) slot.blocked++;
+      if (item.as_name) slot.providers.add(item.as_name);
+    }
+    const rows = Object.values(regions).sort((a,b) => b.events - a.events).map(x => ({
+      ...x, label:`${x.lat.toFixed(1)}°N · ${x.lon.toFixed(1)}°E`,
+      title:[...x.providers].join("、") || "中国来源区域",
+    }));
+    rows.forEach(x => addAttackMarker(x, x.title));
+    $("secMapMeta").textContent = `${rows.length} 个区域 · ${domesticSources} 个攻击源 · ${blockedSources} 个当前封禁`;
+    $("secMapHint").textContent = "中国来源按 0.5° 经纬网格聚合；滚轮、双指缩放，拖动查看";
+    $("secMapNote").textContent = "中国地图使用 CrowdSec 离线 GeoLite2-City 经纬度，只展示中国大陆及港澳台来源；没有省市字段时不猜省份。圆点大小表示事件量，红色外圈表示存在当前封禁。";
+    renderMapRank(rows, domesticSources ? `有 ${unlocated} 个中国来源缺少坐标` : "所选时间内没有中国来源攻击");
+    if (!rows.length)
+      mapEmpty(domesticSources ? "中国来源存在，但缺少可定位坐标" : "所选时间内没有中国来源攻击");
+    if (secMapRenderedMode !== "china") {
+      const chinaZoom = $("secMap").clientWidth >= 700 ? 4 : 3;
+      map.setView([35,104], chinaZoom, {animate:false});
+    }
+  } else {
+    const byCountry = {};
+    for (const item of incidents || []) {
+      const code = String(item.country || "").trim().toUpperCase();
+      if (!code || code === "??") continue;
+      const slot = byCountry[code] || (byCountry[code] = {
+        code, sources:0, events:0, blocked:0, latSum:0, lonSum:0, located:0,
+      });
+      slot.sources++;
+      slot.events += Math.max(1, Number(item.event_count || item.count || 1));
+      if (item.blocked) slot.blocked++;
+      const geo = mapGeo(item);
+      if (geo) { slot.latSum += geo[0]; slot.lonSum += geo[1]; slot.located++; }
+    }
+    const rows = Object.values(byCountry).map(x => {
+      const fallback = COUNTRY_POINT[x.code];
+      return {...x, label:cname(x.code), title:cname(x.code),
+        lat:x.located ? x.latSum/x.located : fallback?.[1],
+        lon:x.located ? x.lonSum/x.located : fallback?.[0]};
+    }).sort((a,b) => b.events - a.events);
+    rows.filter(x => Number.isFinite(x.lat) && Number.isFinite(x.lon))
+      .forEach(x => addAttackMarker(x, x.label));
+    const totalSources = rows.reduce((n,x) => n + x.sources, 0);
+    const blockedSources = rows.reduce((n,x) => n + x.blocked, 0);
+    $("secMapMeta").textContent = `${rows.length} 个国家 · ${totalSources} 个攻击源 · ${blockedSources} 个当前封禁`;
+    $("secMapHint").textContent = "世界地图按国家聚合；滚轮、双指缩放，拖动查看";
+    $("secMapNote").textContent = "世界地图按国家聚合攻击来源。底图由 OpenStreetMap 瓦片提供，瓦片服务只收到当前地图视野和浏览器网络信息，攻击 IP 与事件数据始终只在本页面本地叠加。";
+    renderMapRank(rows, "暂无国家级攻击数据");
+    if (!rows.length) mapEmpty("所选时间内没有可定位的攻击事件");
+    if (secMapRenderedMode !== "world")
+      map.fitBounds([[-55,-175],[75,175]], {padding:[8,8], animate:false});
+  }
+  secMapRenderedMode = secMapMode;
+  setTimeout(() => map.invalidateSize({pan:false}), 0);
 }
 
 function renderSecurityCenter(d) {
@@ -2146,7 +2231,7 @@ function renderSecurityCenter(d) {
     : `<div class="empty">当前采集范围内没有发现保护缺口</div>`;
 
   const inc = d.incidents || {}, incidents = inc.items || [];
-  renderSecurityMap(incidents);
+  renderSecurityMap(incidents, d.map || {});
   $("secIncidents").innerHTML = incidents.length ? `<table class="tbl"><thead><tr>
       <th>攻击源</th><th>涉及机器</th><th>场景</th><th>次数</th><th>状态</th><th></th></tr></thead><tbody>
     ${incidents.map(x => `<tr class="${x.false_positive ? "stale" : ""}">
@@ -2409,6 +2494,13 @@ document.querySelectorAll("[data-sec-range]").forEach(c => {
     secRange = parseInt(c.dataset.secRange);
     document.querySelectorAll("[data-sec-range]").forEach(x => x.classList.toggle("on", x === c));
     secLoadedAt = 0; loadSecurity(true);
+  };
+});
+document.querySelectorAll("[data-sec-map]").forEach(c => {
+  c.onclick = () => {
+    secMapMode = c.dataset.secMap;
+    secMapRenderedMode = null;
+    renderSecurityMap(secData?.incidents?.items || [], secData?.map || {});
   };
 });
 $("secRefresh").onclick = () => { secLoadedAt = 0; loadSecurity(true); };
