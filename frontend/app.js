@@ -42,6 +42,59 @@ const COUNTRY = {
   NP:"尼泊尔", LK:"斯里兰卡", MM:"缅甸", KH:"柬埔寨", LA:"老挝",
   MN:"蒙古", BN:"文莱", MV:"马尔代夫", AF:"阿富汗", SY:"叙利亚",
 };
+
+/* 国家标签点来自 Natural Earth 1:50m Admin 0 Countries（公共领域），只在
+   本地把 ISO 两位码投影到静态 SVG。地图运行时没有外部请求，也不处理 IP。 */
+const COUNTRY_POINT = {
+  AD:[1.54,42.55],AE:[54.55,23.47],AF:[66.5,34.16],AG:[-61.79,17.35],AI:[-63.03,18.24],
+  AL:[20.11,40.65],AM:[44.8,40.46],AO:[17.98,-12.18],AQ:[35.89,-79.84],AR:[-64.17,-33.5],
+  AS:[-170.75,-14.33],AT:[14.13,47.52],AU:[134.05,-24.13],AW:[-69.97,12.52],AX:[19.87,60.16],
+  AZ:[47.21,40.4],BA:[18.07,44.09],BB:[-59.57,13.16],BD:[89.68,24.21],BE:[4.8,50.79],
+  BF:[-1.36,12.67],BG:[25.16,42.51],BH:[50.55,26.06],BI:[29.92,-3.33],BJ:[2.35,10.32],
+  BL:[-62.83,17.9],BM:[-64.76,32.3],BN:[114.55,4.45],BO:[-64.59,-16.67],BR:[-49.56,-12.1],
+  BS:[-77.15,26.4],BT:[90.04,27.54],BW:[24.18,-22.1],BY:[28.42,53.82],BZ:[-88.71,17.2],
+  CA:[-101.91,60.32],CD:[23.46,-1.86],CF:[20.91,6.99],CG:[15.9,.14],CH:[7.46,46.72],
+  CI:[-5.57,7.49],CK:[-159.79,-21.22],CL:[-72.32,-38.15],CM:[12.47,4.59],CN:[106.34,32.5],
+  CO:[-73.17,3.37],CR:[-84.08,10.07],CU:[-77.98,21.33],CV:[-23.64,15.07],CW:[-68.92,12.15],
+  CY:[33.08,34.91],CZ:[15.38,49.88],DE:[9.68,50.96],DJ:[42.5,11.98],DK:[9.02,55.97],
+  DM:[-61.34,15.46],DO:[-70.65,19.1],DZ:[2.81,27.4],EC:[-78.19,-1.26],EE:[25.87,58.72],
+  EG:[29.45,26.19],EH:[-12.63,23.97],ER:[38.29,15.79],ES:[-3.46,40.09],ET:[39.09,8.03],
+  FI:[27.28,63.25],FJ:[177.98,-17.83],FK:[-58.74,-51.61],FM:[158.23,6.89],FO:[-7.06,62.19],
+  FR:[2.2,46.2],GA:[11.84,-.44],GB:[-2.12,54.4],GD:[-61.68,12.11],GE:[43.74,41.87],
+  GG:[-2.56,49.46],GH:[-1.04,7.72],GL:[-39.34,74.32],GM:[-15,13.64],GN:[-10.02,10.62],
+  GQ:[8.99,2.33],GR:[21.73,39.49],GS:[-31.06,-55.68],GT:[-90.5,14.98],GU:[144.7,13.35],
+  GW:[-14.52,12.16],GY:[-58.94,5.12],HK:[114.1,22.45],HM:[73.51,-53.1],HN:[-86.89,14.79],
+  HR:[16.37,45.81],HT:[-72.22,19.26],HU:[19.45,47.09],ID:[101.89,-.95],IE:[-7.8,53.08],
+  IL:[34.85,30.91],IM:[-4.53,54.22],IN:[79.36,22.69],IO:[71.35,-6.19],IQ:[43.26,33.09],
+  IR:[54.93,32.17],IS:[-18.67,64.78],IT:[11.08,44.73],JE:[-2.09,49.22],JM:[-77.32,18.14],
+  JO:[36.38,30.81],JP:[138.44,36.14],KE:[37.91,.55],KG:[74.53,41.67],KH:[104.5,12.65],
+  KI:[-157.38,1.82],KM:[43.32,-11.73],KN:[-62.76,17.34],KP:[126.44,39.89],KR:[128.13,36.38],
+  KW:[47.31,29.41],KY:[-81.24,19.32],KZ:[68.69,49.05],LA:[102.53,19.43],LB:[35.99,34.13],
+  LC:[-60.98,13.89],LI:[9.56,47.11],LK:[80.7,7.58],LR:[-9.46,6.45],LS:[28.25,-29.48],
+  LT:[24.09,55.1],LU:[6.08,49.73],LV:[25.46,57.07],LY:[18.01,26.64],MA:[-7.19,31.65],
+  MC:[7.4,43.74],MD:[28.49,47.43],ME:[19.14,42.8],MF:[-63.05,18.08],MG:[46.7,-18.63],
+  MH:[171.19,7.08],MK:[21.56,41.56],ML:[-2.04,18.69],MM:[95.8,21.57],MN:[104.15,46],
+  MO:[113.56,22.13],MP:[145.73,15.19],MR:[-9.74,19.59],MS:[-62.19,16.74],MT:[14.43,35.89],
+  MU:[57.57,-20.3],MV:[73.51,4.17],MW:[33.61,-13.39],MX:[-102.29,23.92],MY:[113.84,2.53],
+  MZ:[37.84,-13.94],NA:[17.11,-20.58],NC:[165.08,-21.06],NE:[9.5,17.45],NF:[167.95,-29.03],
+  NG:[7.5,9.44],NI:[-85.07,12.67],NL:[5.61,52.42],NO:[9.6,61.3],NP:[83.64,28.3],
+  NR:[166.93,-.52],NU:[-169.86,-19.05],NZ:[172.79,-39.76],OM:[57.34,22.12],PA:[-80.35,8.72],
+  PE:[-72.9,-12.98],PF:[-149.46,-17.63],PG:[143.91,-5.7],PH:[122.47,11.2],PK:[68.55,29.33],
+  PL:[19.49,51.99],PM:[-56.33,47.04],PN:[-128.32,-24.36],PR:[-66.48,18.23],PS:[35.29,32.05],
+  PT:[-8.27,39.61],PW:[134.58,7.52],PY:[-60.15,-21.67],QA:[51.14,25.24],RO:[24.97,45.73],
+  RS:[20.79,44.19],RU:[44.69,58.25],RW:[30.1,-1.9],SA:[44.7,23.81],SB:[159.17,-8.03],
+  SC:[55.48,-4.68],SD:[29.26,16.33],SE:[19.02,65.86],SG:[103.82,1.37],SH:[-5.71,-15.95],
+  SI:[14.92,46.06],SK:[19.05,48.73],SL:[-11.76,8.62],SM:[12.44,43.93],SN:[-14.78,15.14],
+  SO:[45.19,3.57],SR:[-55.91,4.14],SS:[30.39,7.23],ST:[7.02,.97],SV:[-88.89,13.69],
+  SX:[-63.07,18.04],SY:[38.28,35.01],SZ:[31.47,-26.53],TC:[-71.75,21.82],TD:[18.65,15.14],
+  TF:[69.12,-49.3],TG:[1.06,8.81],TH:[101.07,15.46],TJ:[72.59,38.2],TL:[125.85,-8.8],
+  TM:[58.68,39.86],TN:[9.01,33.69],TO:[-175.16,-21.21],TR:[34.51,39.35],TT:[-60.92,11],
+  TV:[179.21,-8.51],TW:[120.87,23.65],TZ:[34.96,-6.05],UA:[32.14,49.72],UG:[32.95,1.97],
+  US:[-97.48,39.54],UY:[-55.97,-32.96],UZ:[64.01,41.69],VA:[12.45,41.9],VC:[-61.34,13.09],
+  VE:[-64.6,7.18],VG:[-64.64,18.43],VI:[-64.78,17.75],VN:[105.39,21.72],VU:[166.91,-15.37],
+  WF:[-178.14,-14.29],WS:[-172.44,-13.64],XK:[20.9,42.6],YE:[45.87,15.33],ZA:[23.67,-29.71],
+  ZM:[26.4,-14.66],ZW:[29.93,-18.91],
+};
 /* 机器名 -> 固定色调。同一台机器在所有卡片里颜色一致，
    多机场景下扫一眼就能归类，不用逐行读文字 */
 function machineTone(name) {
@@ -1992,6 +2045,68 @@ const secStatusName = s => ({open:"待处理", investigating:"调查中",
 const secChangeName = s => ({pending:"执行中", applied:"已生效", failed:"失败",
   rolled_back:"已回滚", auto_rolled_back:"自动回滚", rollback_failed:"回滚失败"}[s] || s);
 
+function renderSecurityMap(incidents) {
+  const byCountry = {};
+  for (const item of incidents || []) {
+    const code = String(item.country || "").trim().toUpperCase();
+    if (!code || code === "??") continue;
+    const slot = byCountry[code] || (byCountry[code] = {
+      code, sources:0, events:0, blocked:0,
+    });
+    slot.sources++;
+    slot.events += Math.max(1, Number(item.event_count || item.count || 1));
+    if (item.blocked) slot.blocked++;
+  }
+  const countries = Object.values(byCountry).sort((a,b) => b.events - a.events);
+  const totalSources = countries.reduce((n,x) => n + x.sources, 0);
+  const blockedSources = countries.reduce((n,x) => n + x.blocked, 0);
+  $("secMapMeta").textContent = `${countries.length} 个国家 · ${totalSources} 个攻击源 · ${blockedSources} 个当前封禁`;
+
+  const px = lon => (lon + 180) * 2;
+  const py = lat => (90 - Math.max(-90, Math.min(90, lat))) * 1.8333;
+  const points = countries.filter(x => COUNTRY_POINT[x.code]).sort((a,b) => b.events - a.events)
+    .map(x => {
+      const [lon,lat] = COUNTRY_POINT[x.code];
+      const r = Math.min(17, 4.5 + Math.log2(x.events + 1) * 2.15);
+      const tip = `${cname(x.code)}：${x.sources} 个攻击源，${x.events} 个事件，${x.blocked} 个当前封禁`;
+      return `<circle class="attack${x.blocked ? " blocked" : ""}" cx="${px(lon).toFixed(1)}"
+        cy="${py(lat).toFixed(1)}" r="${r.toFixed(1)}"><title>${esc(tip)}</title></circle>`;
+    }).join("");
+
+  /* 简化大陆轮廓仅用于方位参照；攻击点采用上面的真实国家标签坐标。 */
+  $("secMap").innerHTML = `<svg viewBox="0 0 720 330" role="img"
+      aria-label="攻击来源与当前封禁国家分布图" preserveAspectRatio="xMidYMid meet">
+    <g opacity=".75">
+      <path class="map-grid" d="M0 82.5H720M0 165H720M0 247.5H720M180 0V330M360 0V330M540 0V330"/>
+    </g>
+    <g>
+      <path class="land" d="M24 49L58 27 113 34 155 50 185 68 230 79 258 104 240 128 202 126 177 116 150 132 123 157 91 145 69 119 43 101Z"/>
+      <path class="land" d="M248 22L287 17 320 40 307 76 274 83 252 57Z"/>
+      <path class="land" d="M241 145L279 155 311 187 321 220 305 263 286 305 269 273 261 227 245 190 228 164Z"/>
+      <path class="land" d="M337 79L368 65 409 71 432 90 420 111 383 115 352 105 331 91Z"/>
+      <path class="land" d="M345 112L391 105 430 126 453 166 438 211 410 263 377 248 363 207 338 167 326 132Z"/>
+      <path class="land" d="M405 70L458 48 525 45 584 61 637 78 684 112 669 147 625 157 594 179 550 166 518 141 476 137 445 112 416 102Z"/>
+      <path class="land" d="M553 213L594 201 651 221 674 255 646 282 590 279 555 250Z"/>
+      <path class="land" d="M688 275L706 269 716 286 699 303 684 291Z"/>
+    </g>
+    <text class="ocean-label" x="90" y="190">太平洋</text>
+    <text class="ocean-label" x="335" y="154">大西洋</text>
+    <text class="ocean-label" x="500" y="220">印度洋</text>
+    <g>${points}</g>
+  </svg>${countries.length ? "" : '<div class="secmap-empty">所选时间内没有可定位的攻击事件</div>'}`;
+
+  const maxEvents = Math.max(1, ...countries.map(x => x.events));
+  $("secMapRank").innerHTML = `<div class="secmap-legend">
+      <span class="map-key"><i class="map-dot"></i>检测到攻击</span>
+      <span class="map-key"><i class="map-dot blocked"></i>存在当前封禁</span>
+    </div>${countries.slice(0,8).map((x,i) => `<div class="row">
+      <span class="k"><b style="font-weight:500">${i+1}. ${esc(cname(x.code))}</b>
+        <span class="tag">${x.sources} 源</span>${x.blocked ? `<span class="tag crit">${x.blocked} 封</span>` : ""}</span>
+      <span class="bar"><i class="${x.blocked ? "crit" : ""}" style="width:${Math.max(4,x.events/maxEvents*100).toFixed(1)}%"></i></span>
+      <span class="v">${x.events} 事件</span>
+    </div>`).join("") || '<div class="empty center">暂无国家级攻击数据</div>'}`;
+}
+
 function renderSecurityCenter(d) {
   secData = d;
   const c = d.coverage || {}, cc = c.counts || {};
@@ -2031,6 +2146,7 @@ function renderSecurityCenter(d) {
     : `<div class="empty">当前采集范围内没有发现保护缺口</div>`;
 
   const inc = d.incidents || {}, incidents = inc.items || [];
+  renderSecurityMap(incidents);
   $("secIncidents").innerHTML = incidents.length ? `<table class="tbl"><thead><tr>
       <th>攻击源</th><th>涉及机器</th><th>场景</th><th>次数</th><th>状态</th><th></th></tr></thead><tbody>
     ${incidents.map(x => `<tr class="${x.false_positive ? "stale" : ""}">

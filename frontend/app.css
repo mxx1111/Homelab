@@ -129,6 +129,18 @@ body.nodeview .nodepick{border-color:var(--accent); color:var(--accent); font-we
 .grid.cols4{grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}
 .grid.cols2{grid-template-columns:repeat(auto-fit,minmax(440px,1fr))}
 
+/* 连接/端口页只有两张摘要卡。通用 auto-fill 网格在 2K 屏会生成五列，
+   两张卡只占前三列，造成右侧近一半空白。这里明确成“窄摘要 + 自适应主卡”，
+   下方明细仍跨整行，宽屏和表格的视觉边界就一致了。 */
+.summary-grid{grid-template-columns:minmax(280px,330px) minmax(0,1fr)}
+.summary-grid>*{min-width:0}
+.summary-grid>.card.span2{grid-column:auto}
+.summary-grid>.card.full{grid-column:1/-1}
+@media(max-width:760px){
+  .summary-grid{grid-template-columns:1fr}
+  .summary-grid>.card.full{grid-column:auto}
+}
+
 /* ---------- 区块分隔 ---------- */
 .section{display:flex; align-items:center; gap:14px; margin:26px 2px 12px}
 .section:first-of-type{margin-top:4px}
@@ -344,6 +356,45 @@ select{cursor:pointer; appearance:none; padding-right:30px;
 .secstage em{font:600 13px/1.3 var(--mono); font-style:normal; overflow:hidden;
              text-overflow:ellipsis; white-space:nowrap}
 @media(max-width:900px){.secpipe{grid-template-columns:repeat(2,minmax(120px,1fr))}}
+
+/* 国家级攻击态势图。底图与国家中心点都随前端静态文件发布，页面不加载地图瓦片，
+   也不会把攻击 IP 交给第三方。轮廓只承担方位参照，数据点才是主角。 */
+.secmap-card{padding-bottom:14px}
+.secmap-layout{display:grid; grid-template-columns:minmax(0,2.2fr) minmax(250px,.8fr);
+               gap:22px; align-items:start}
+.secmap{height:clamp(270px,28vw,420px); border:1px solid var(--border); border-radius:var(--radius-sm);
+        background:var(--card-alt); overflow:hidden; position:relative}
+.secmap svg{display:block; width:100%; height:100%}
+.secmap .map-grid{stroke:var(--border); stroke-width:1; stroke-dasharray:3 5}
+.secmap .land{fill:var(--card); stroke:var(--border-strong); stroke-width:1.1;
+              vector-effect:non-scaling-stroke}
+.secmap .ocean-label{fill:var(--faint); font:10px var(--sans); letter-spacing:.08em}
+.secmap .attack{fill:var(--accent); fill-opacity:.74; stroke:var(--card); stroke-width:2;
+                vector-effect:non-scaling-stroke}
+.secmap .attack.blocked{stroke:var(--crit); stroke-width:3}
+.secmap .attack:hover{fill-opacity:1; stroke-width:4}
+.secmap-empty{position:absolute; inset:0; display:grid; place-items:center;
+              color:var(--faint); font-size:13px; pointer-events:none}
+.secmap-rank{display:flex; flex-direction:column; min-width:0}
+.secmap-legend{display:flex; align-items:center; flex-wrap:wrap; gap:8px 15px;
+               color:var(--dim); font-size:11.5px; margin-bottom:9px}
+.map-key{display:inline-flex; align-items:center; gap:6px}
+.map-dot{width:10px; height:10px; border-radius:50%; background:var(--accent);
+         border:2px solid var(--card)}
+.map-dot.blocked{border-color:var(--crit)}
+.secmap-rank .row{padding:8px 0}
+.secmap-rank .k{flex:1}
+.secmap-rank .bar{width:min(130px,34%); margin:0 8px 0 auto; flex:none}
+.secmap-rank .v{font-size:12px; min-width:64px; text-align:right}
+@media(max-width:1000px){
+  .secmap-layout{grid-template-columns:1fr}
+  .secmap-rank{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px}
+  .secmap-legend{grid-column:1/-1}
+}
+@media(max-width:640px){
+  .secmap{height:220px}
+  .secmap-rank{display:block}
+}
 
 /* ---------- 告警条 ---------- */
 .alertbar{display:flex; flex-direction:column; gap:8px; margin-bottom:18px}

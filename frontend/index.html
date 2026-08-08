@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Homelab</title>
-<link rel="stylesheet" href="/static/app.css?v=0.5.0-1">
+<link rel="stylesheet" href="/static/app.css?v=0.5.0-2">
 </head>
 <body>
 <div class="wrap">
@@ -116,6 +116,18 @@
       <div class="card flat span2" id="secPipeline"></div>
       <div class="card flat" id="secAppsec"></div>
     </div>
+    <div class="section"><h3>攻击态势</h3><i class="rule"></i>
+      <span class="meta">国家级聚合，不上传攻击 IP</span></div>
+    <div class="card flat secmap-card">
+      <h2><span class="dot info"></span>攻击来源与当前封禁
+        <span class="right" id="secMapMeta"></span></h2>
+      <div class="secmap-layout">
+        <div class="secmap" id="secMap"></div>
+        <div class="secmap-rank" id="secMapRank"></div>
+      </div>
+      <div class="note">圆点大小表示事件量；红色外圈表示该国家至少有一个攻击源当前仍在封禁列表中。
+        这是国家级态势，不把正常连接算作攻击，也不代表每一次历史攻击都已拦截。</div>
+    </div>
     <div class="section"><h3>覆盖缺口</h3><i class="rule"></i></div>
     <div class="card flat"><div class="scroll" id="secIssues"></div></div>
     <div class="section"><h3>事件中心</h3><i class="rule"></i>
@@ -128,7 +140,7 @@
 
   <!-- 连接 -->
   <div id="conns" class="hide">
-    <div class="grid">
+    <div class="grid summary-grid">
       <div class="card" id="connStat"></div>
       <div class="card span2" id="connPorts"></div>
       <div class="card full flat">
@@ -148,7 +160,7 @@
 
   <!-- 端口 -->
   <div id="ports" class="hide">
-    <div class="grid">
+    <div class="grid summary-grid">
       <div class="card" id="portStat"></div>
       <div class="card span2" id="portPublic"></div>
       <div class="card full flat">
@@ -272,6 +284,6 @@
   </form>
 </div>
 
-<script src="/static/app.js?v=0.5.0"></script>
+<script src="/static/app.js?v=0.5.0-1"></script>
 </body>
 </html>
