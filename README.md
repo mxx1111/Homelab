@@ -514,8 +514,8 @@ CrowdSec 的任何配置文件。
   缓存在本地 SQLite；没配 key 时不访问外网
 - **攻击态势**：使用开源 [Leaflet](https://leafletjs.com/)（BSD-2-Clause）
   交互地图，可缩放、拖动并切换世界/中国视图。
-  世界视图按国家聚合；中国视图读取 CrowdSec 已落库的 GeoLite2-City 经纬度，
-  按 0.5° 网格聚合中国大陆及港澳台来源。攻击 IP 和事件数据只在浏览器本地
+  世界视图按国家聚合；中国视图使用 CrowdSec 本地 GeoLite2-City 数据库读取
+  中文省市和经纬度，按 0.5° 网格聚合中国大陆及港澳台来源。攻击 IP 和事件数据只在浏览器本地
   叠加，不会传给底图服务；普通连接也不会被算作攻击
 - **应用防护**：可把 1Panel OpenResty 的 `1pwaf/data` 目录只读挂到
   `/app/security/1panel-waf`，展示已有规则能力与统计。面板不会修改 WAF 配置

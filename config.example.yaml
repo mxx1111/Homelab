@@ -76,6 +76,8 @@ crowdsec:
   lapi_url: http://127.0.0.1:8080
   api_key: ""
   db_path: /var/lib/crowdsec/data/crowdsec.db
+  # 用本地城市库把攻击来源显示为中文省市，不会把攻击 IP 发给第三方
+  geoip_city_db: /var/lib/crowdsec/data/GeoLite2-City.mmdb
   metrics_url: http://127.0.0.1:6060/metrics
   # 封禁/解封用。直接复用 crowdsec agent 的 machine 凭据，
   # compose 里只读挂载，密钥不进版本库

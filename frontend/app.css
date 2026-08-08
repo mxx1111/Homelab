@@ -382,6 +382,7 @@ select{cursor:pointer; appearance:none; padding-right:30px;
                          border:1px solid #CBC7BC; border-radius:9px;
                          box-shadow:0 8px 24px rgba(34,32,27,.20)}
 .secmap .map-tip-head{font-weight:650; font-size:13px; color:#262521; margin-bottom:5px}
+.secmap .map-tip-coord{font-size:11px; color:#918E86; margin:-3px 0 5px}
 .secmap .map-tip-counts{display:flex; gap:7px; color:#57554F; margin-bottom:5px}
 .secmap .map-tip-counts span+span::before{content:"·"; margin-right:7px; color:#A5A198}
 .secmap .map-provider{color:#6F6D66; padding-top:5px; border-top:1px solid #ECE9E1}

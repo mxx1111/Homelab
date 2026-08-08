@@ -2090,11 +2090,6 @@ function mapGeo(item) {
     ? [lat, lon] : null;
 }
 
-function compactMapText(value, maxLength=28) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
-}
-
 function addAttackMarker(row, label, detail="") {
   const r = Math.min(18, 5 + Math.log2(row.events + 1) * 2.1);
   const blockedText = row.blocked ? `${row.blocked} 个当前封禁` : "当前无封禁";
@@ -2102,6 +2097,7 @@ function addAttackMarker(row, label, detail="") {
     radius:r, color:row.blocked ? "#BC4C3C" : "#FFFFFF",
     weight:row.blocked ? 3 : 2, fillColor:"#D97757", fillOpacity:.76,
   }).bindTooltip(`<div class="map-tip-head">${esc(label)}</div>` +
+    (row.coordinate ? `<div class="map-tip-coord">${esc(row.coordinate)}</div>` : "") +
     `<div class="map-tip-counts"><span>${row.sources} 个攻击源</span><span>${row.events} 个事件</span></div>` +
     (detail ? `<div class="map-provider">${esc(detail)}</div>` : "") +
     `<div class="map-tip-status ${row.blocked ? "blocked" : "clear"}"><i></i>${blockedText}</div>`,
@@ -2142,20 +2138,24 @@ function renderSecurityMap(incidents, mapCfg={}) {
       const lat = Math.round(geo[0] * 2) / 2, lon = Math.round(geo[1] * 2) / 2;
       const key = `${lat}:${lon}`;
       const slot = regions[key] || (regions[key] = {
-        lat, lon, sources:0, events:0, blocked:0, providers:new Set(),
+        lat, lon, sources:0, events:0, blocked:0, providers:new Set(), places:new Set(),
       });
       slot.sources++;
       slot.events += Math.max(1, Number(item.event_count || item.count || 1));
       if (item.blocked) slot.blocked++;
-      if (item.as_name) slot.providers.add(item.as_name);
+      if (item.as_label || item.as_name) slot.providers.add(item.as_label || item.as_name);
+      if (item.location_name) slot.places.add(item.location_name);
     }
     const rows = Object.values(regions).sort((a,b) => b.events - a.events).map(x => {
       const providers = [...x.providers];
+      const places = [...x.places];
       const providerSummary = providers.length
-        ? providers.slice(0,2).map(y => compactMapText(y)).join("、") +
+        ? `网络归属：${providers.slice(0,2).join("、")}` +
           (providers.length > 2 ? ` 等 ${providers.length} 家网络` : "")
         : "网络归属未知";
-      return {...x, label:`${x.lat.toFixed(1)}°N · ${x.lon.toFixed(1)}°E`,
+      const coordinate = `${x.lat.toFixed(1)}°N · ${x.lon.toFixed(1)}°E`;
+      const placeLabel = places.join("、") || "中国来源区域";
+      return {...x, label:placeLabel, coordinate,
         title:providerSummary, providerSummary};
     });
     rows.forEach(x => addAttackMarker(x, x.label, x.providerSummary));

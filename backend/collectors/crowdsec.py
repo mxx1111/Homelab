@@ -6,17 +6,100 @@
 LAPI 的 bouncer key 只有 decisions 权限，读不到告警明细，故告警走库。
 """
 import json
+import os
 import re
 import sqlite3
 import subprocess
+import threading
 from datetime import datetime, timezone
 
+import geoip2.database
+from geoip2.errors import AddressNotFoundError
 import httpx
 
 from ..asn_names import pretty_as
 from ..scenario_names import scenario_cn
 
 DEFAULT_DB = "/var/lib/crowdsec/data/crowdsec.db"
+DEFAULT_CITY_DB = "/var/lib/crowdsec/data/GeoLite2-City.mmdb"
+
+_city_lock = threading.Lock()
+_city_reader = None
+_city_reader_key = None
+_city_cache = {}
+
+
+def _localized_name(record):
+    names = getattr(record, "names", None) or {}
+    return names.get("zh-CN") or names.get("zh") or getattr(record, "name", None)
+
+
+def _join_place(country_code, country_name, subdivision_name, city_name):
+    """把 GeoLite2 的多级名称整理成完整中文地名，避免“广东省深圳市深圳市”。"""
+    parts = []
+    if country_code not in ("CN", "HK", "MO", "TW") and country_name:
+        parts.append(country_name)
+    elif country_code in ("HK", "MO", "TW") and country_name:
+        parts.append(country_name)
+    for name in (subdivision_name, city_name):
+        name = str(name or "").strip()
+        if not name:
+            continue
+        if any(name == old or name in old or old in name for old in parts):
+            continue
+        parts.append(name)
+    return "".join(parts) or country_name or None
+
+
+def _city_db_reader(cfg):
+    global _city_reader, _city_reader_key, _city_cache
+    crowdsec = (cfg or {}).get("crowdsec") or {}
+    db_path = crowdsec.get("db_path") or DEFAULT_DB
+    path = crowdsec.get("geoip_city_db") or os.path.join(os.path.dirname(db_path),
+                                                          "GeoLite2-City.mmdb")
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    if _city_reader is not None and _city_reader_key == key:
+        return _city_reader
+    if _city_reader is not None:
+        _city_reader.close()
+    _city_reader = geoip2.database.Reader(path, locales=["zh-CN", "en"])
+    _city_reader_key = key
+    _city_cache = {}
+    return _city_reader
+
+
+def _location_name(ip, cfg):
+    if not ip:
+        return None
+    with _city_lock:
+        if ip in _city_cache:
+            return _city_cache[ip]
+        reader = _city_db_reader(cfg)
+        if reader is None:
+            return None
+        try:
+            response = reader.city(ip)
+            country = _localized_name(response.country)
+            subdivision = _localized_name(response.subdivisions.most_specific)
+            city = _localized_name(response.city)
+            value = _join_place(response.country.iso_code, country, subdivision, city)
+        except (AddressNotFoundError, ValueError, OSError):
+            value = None
+        if len(_city_cache) >= 5000:
+            _city_cache.clear()
+        _city_cache[ip] = value
+        return value
+
+
+def _enrich_alerts(alerts, cfg):
+    for item in alerts or []:
+        item["as_label"] = pretty_as(item.get("as_name"))
+        item["location_name"] = _location_name(item.get("ip"), cfg)
+    return alerts
 
 
 def _machine_label(machine_id):
@@ -409,6 +492,7 @@ def collect(cfg):
     if alerts is None:
         result["alerts_error"] = "; ".join(errs) or "无可用数据源"
     else:
+        alerts = _enrich_alerts(alerts, cfg)
         result["alerts"] = alerts
         result["alerts_source"] = src
         result["alerts_24h"] = sum(

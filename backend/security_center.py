@@ -286,6 +286,8 @@ class SecurityCenter:
             slot = grouped[key]
             slot.update({"key": key, "ip": alert["ip"], "country": alert.get("country"),
                          "as_name": alert.get("as_name"),
+                         "as_label": alert.get("as_label"),
+                         "location_name": alert.get("location_name"),
                          "latitude": alert.get("latitude"),
                          "longitude": alert.get("longitude")})
             slot["count"] += 1

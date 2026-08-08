@@ -22,6 +22,8 @@ import random
 import threading
 import time
 
+from .asn_names import pretty_as
+
 RESET_SECONDS = 3600
 
 # 固定种子：每次启动生成同一套"世界"，截图和文档才对得上。
@@ -99,6 +101,17 @@ ATTACKER_GEO = {
     "167.94.138.20": (42.28, -83.74),
     "20.65.193.42": (37.43, -78.66),
     "139.59.42.118": (12.97, 77.59),
+}
+
+ATTACKER_PLACE = {
+    "45.132.193.87": "俄罗斯圣彼得堡",
+    "103.149.28.51": "越南河内市",
+    "185.243.96.114": "荷兰阿姆斯特丹",
+    "222.186.30.76": "江苏省南京市",
+    "92.63.197.153": "俄罗斯莫斯科",
+    "167.94.138.20": "美国密歇根州安娜堡",
+    "20.65.193.42": "美国弗吉尼亚州",
+    "139.59.42.118": "印度卡纳塔克邦班加罗尔",
 }
 
 CONTAINERS = [
@@ -271,6 +284,8 @@ def crowdsec(cfg):
             age = 0.4 + k * 1.7 + ATTACKERS.index((ip, cc, asn, _cn, count, scen)) * 2.2
             alerts.append({"id": aid, "created_at": None, "scenario": s,
                            "ip": ip, "country": cc, "as_name": asn,
+                           "as_label": pretty_as(asn),
+                           "location_name": ATTACKER_PLACE[ip],
                            "latitude": ATTACKER_GEO[ip][0],
                            "longitude": ATTACKER_GEO[ip][1],
                            "events_count": max(3, count // (k + 2)),
@@ -287,7 +302,6 @@ def crowdsec(cfg):
         slot = by_country.setdefault(cc, {"code": cc, "count": 0, "ips": 0})
         slot["count"] += n
         slot["ips"] += 1
-    from .asn_names import pretty_as
     by_asn = {}
     for ip, cc, asn, _cn, n, _s in ATTACKERS:
         slot = by_asn.setdefault(asn, {"as_name": asn, "as_label": pretty_as(asn),
