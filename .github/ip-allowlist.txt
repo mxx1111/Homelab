@@ -1,0 +1,28 @@
+# Format: <path-glob>: <literal-or-*>
+# Keep entries narrow. Use "*" only for committed demo/example files.
+
+backend/collectors/connections.py: 10.0.0.0/8
+backend/collectors/connections.py: 172.16.0.0/12
+backend/collectors/connections.py: 192.168.0.0/16
+backend/collectors/connections.py: 127.0.0.0/8
+backend/collectors/connections.py: 100.64.0.0/10
+backend/collectors/connections.py: 169.254.0.0/16
+backend/collectors/crowdsec.py: 127.0.0.1
+backend/collectors/engine.py: 127.0.0.1
+backend/demo.py: *
+backend/firewall.py: 127.0.0.0/8
+backend/firewall.py: 10.0.0.0/8
+backend/firewall.py: 172.16.0.0/12
+backend/firewall.py: 192.168.0.0/16
+backend/firewall.py: 100.64.0.0/10
+config.demo.yaml: *
+config.example.yaml: *
+docker-compose.demo.hardening.yml: *
+docker-compose.demo.yml: 127.0.0.1
+docker-compose.yml: 127.0.0.1
+frontend/index.html: 1.2.3.4
+frontend/index.html: 1.2.3.0/24
+scripts/demo-autoupdate.sh: 172.31.240.2
+scripts/demo-isolate.sh: 172.31.240.0/28
+scripts/tailscale-cgnat-fix.sh: *
+scripts/watchdog.env.example: *

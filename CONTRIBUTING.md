@@ -57,11 +57,15 @@ def collect(cfg):
 - 任何密钥、内网 IP、域名
 - `data/` 下的历史数据库
 
-提 PR 前跑一遍：
+CI 会在 PR 和 `main` 分支 push 上拦截误提交的 `config.yaml`、`data/`
+内容，以及非 Markdown 文件里的硬编码 IPv4。提 PR 前仍建议本地跑一遍：
 
 ```bash
 git grep -nE "([0-9]{1,3}\.){3}[0-9]{1,3}" -- ':!*.md'   # 检查有没有硬编码 IP
 ```
+
+如果确实需要保留某个字面量，请在 `.github/ip-allowlist.txt` 里加一个尽量
+窄的 `路径: 字面量` 条目，并在 PR 里说明原因；不要为了绕过 CI 放宽匹配规则。
 
 ### 特别欢迎
 
@@ -128,11 +132,17 @@ operation go through `_guard()`?
 - Any credentials, internal IPs or domain names
 - The history database under `data/`
 
-Before opening a PR:
+CI blocks accidentally committed `config.yaml`, anything under `data/`, and
+hardcoded IPv4 literals in non-Markdown files on pull requests and pushes to
+`main`. Before opening a PR, it is still worth running:
 
 ```bash
 git grep -nE "([0-9]{1,3}\.){3}[0-9]{1,3}" -- ':!*.md'   # look for hardcoded IPs
 ```
+
+If a literal is genuinely needed, add the narrowest possible
+`path: literal` entry to `.github/ip-allowlist.txt` and explain why in the PR;
+do not weaken the matching rule just to make CI pass.
 
 ### Especially welcome
 
