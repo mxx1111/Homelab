@@ -377,7 +377,7 @@ docker compose restart
 | `crowdsec` | LAPI 地址、数据库路径、凭据文件 |
 | `firewall` | 写操作开关与令牌，见[第五步](#第五步打开写操作) |
 | `history` | SQLite 历史库路径与保留天数 |
-| `notify` | Server 酱推送，SendKey 走环境变量不写这里 |
+| `notify` | 告警推送 (Server 酱 / ntfy)，凭据走环境变量不写这里 |
 | `alerts.rules` | 各类告警的阈值与开关，**也可以在面板「设置」页改** |
 | `ports` | 端口标签、公网端口声明、放行脚本路径 |
 | `disks.warn_hours` | 硬盘通电时长告警阈值，默认 35000 小时（约 4 年） |
@@ -538,16 +538,23 @@ CrowdSec 的任何配置文件。
 
 ### 告警与推送
 
-走 [Server 酱](https://sct.ftqq.com/)。SendKey **不要写进 config.yaml**，
-放 `.env`：
+支持 [Server 酱](https://sct.ftqq.com/) 与 [ntfy](https://ntfy.sh/)（支持自建与云端）。敏感凭据 **不要写进 config.yaml**，放 `.env`：
 
+**使用 Server 酱 (默认)：**
 ```bash
 cp .env.example .env
 echo "HOMELAB_SENDKEY=你的SendKey" >> .env
 docker compose up -d
 ```
-
 `sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。
+
+**使用 ntfy：**
+在 `config.yaml` 中配置 `notify.provider: ntfy`，并在 `.env` 中设置 topic 与可选 token：
+```bash
+echo "HOMELAB_NTFY_URL=https://ntfy.sh/your-secret-topic" >> .env
+# echo "HOMELAB_NTFY_TOKEN=tk_optional_auth_token" >> .env
+docker compose up -d
+```
 
 告警有三层防刷屏：`sustain_seconds` 持续时间门槛、`repeat_hours` 重复提醒
 间隔、以及单条告警的「忽略」（可设时长或永久，在设置页管理）。
