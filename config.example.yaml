@@ -147,17 +147,28 @@ history:
   path: /app/data/homelab.db
   retain_days: 90
 
-# 告警推送。走 Server 酱
+# 告警推送。支持 Server 酱 (serverchan) 与 ntfy
 notify:
-  # 留空则"填了 SendKey 就自动启用"；显式写 false 可强制关掉推送
+  # 推送渠道: serverchan (默认) / ntfy
+  provider: serverchan
+  # 留空则"填了 SendKey/URL 就自动启用"；显式写 false 可强制关掉推送
   # enabled: true
-  # SendKey 不写这里——config.yaml 要进版本库。放 .env 的 HOMELAB_SENDKEY，
+  # 低于此级别不推送: info < warn < crit
+  min_level: warn
+
+  # --- Server 酱配置 (provider: serverchan) ---
+  # SendKey 不建议写这里——config.yaml 要进版本库。放 .env 的 HOMELAB_SENDKEY，
   # compose 通过 env_file 注入
   sendkey: ""
   # Server 酱的通道号，留空用默认通道
   channel: ""
-  # 低于此级别不推送: info < warn < crit
-  min_level: warn
+
+  # --- ntfy 配置 (provider: ntfy) ---
+  # topic URL，如 https://ntfy.sh/my-homelab-alerts 或自建实例地址。
+  # 建议放 .env 的 HOMELAB_NTFY_URL
+  url: ""
+  # 可选：受保护 topic 的访问令牌。建议放 .env 的 HOMELAB_NTFY_TOKEN
+  token: ""
 
 alerts:
   enabled: true

@@ -655,13 +655,14 @@ def alerts_test(request: Request, x_panel_token: Optional[str] = Header(default=
     if not notifier.enabled:
         raise HTTPException(
             status_code=400,
-            detail="推送未启用。在 config.yaml 的 notify 段填 sendkey 并设 enabled: true")
+            detail="推送未启用。请在 config.yaml 或环境变量中配置 notify 并启用")
+    provider_name = 'ntfy' if getattr(notifier, 'provider', '') == 'ntfy' else 'Server 酱'
     err = notifier.send(f"[{alert_engine.site_name}] 测试推送",
-                        "如果你收到这条，说明 Server 酱配置正确。\n\n"
+                        f"如果你收到这条，说明 {provider_name} 配置正确。\n\n"
                         f"时间 {time.strftime('%Y-%m-%d %H:%M:%S')}")
     if err:
         raise HTTPException(status_code=400, detail=err)
-    return {"ok": True, "message": "已发送，检查你的 Server 酱通道"}
+    return {"ok": True, "message": f"已发送，检查你的 {'ntfy' if getattr(notifier, 'provider', '') == 'ntfy' else 'Server 酱'} 通道"}
 
 
 @app.get("/")

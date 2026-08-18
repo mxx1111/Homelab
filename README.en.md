@@ -543,20 +543,24 @@ that it never touches CrowdSec's configuration.
 
 ### Alerts and push
 
-Uses [Server酱](https://sct.ftqq.com/) (a Chinese WeChat push service).
-**Don't put the SendKey in `config.yaml`** — use `.env`:
+Supports [Server酱](https://sct.ftqq.com/) (WeChat push) and [ntfy](https://ntfy.sh/).
+**Don't put secrets in `config.yaml`** — use `.env`:
 
 ```bash
 cp .env.example .env
+# For Server酱 (default):
 echo "HOMELAB_SENDKEY=your-sendkey" >> .env
+# Or for ntfy:
+# echo "HOMELAB_NTFY_URL=https://ntfy.sh/your-topic" >> .env
+# echo "HOMELAB_NTFY_TOKEN=optional-token" >> .env
 docker compose up -d
 ```
 
-Keys starting with `sctp` use Server酱³, others use the Turbo endpoint; detected
-automatically.
+- **Server酱**: Keys starting with `sctp` use Server酱³, others use the Turbo endpoint (detected automatically).
+- **ntfy**: Set `notify.provider: ntfy` in `config.yaml`. Supports both ntfy.sh and self-hosted instances with optional Bearer tokens.
 
-> Want a different push provider (Telegram, Bark, Gotify, ntfy)? `backend/notify.py`
-> is about 60 lines with a single `send()` entry point — PRs very welcome.
+> Want another push provider (Telegram, Bark, Gotify)? `backend/notify.py`
+> has a minimal structure with a single `send()` entry point — PRs very welcome.
 
 Three layers keep alerts from spamming you: the `sustain_seconds` duration gate,
 the `repeat_hours` reminder interval, and per-alert muting (timed or permanent,

@@ -538,16 +538,21 @@ CrowdSec 的任何配置文件。
 
 ### 告警与推送
 
-走 [Server 酱](https://sct.ftqq.com/)。SendKey **不要写进 config.yaml**，
+支持 [Server 酱](https://sct.ftqq.com/) 与 [ntfy](https://ntfy.sh/)。密钥与敏感 URL **不要写进 config.yaml**，
 放 `.env`：
 
 ```bash
 cp .env.example .env
+# 使用 Server 酱 (默认):
 echo "HOMELAB_SENDKEY=你的SendKey" >> .env
+# 或使用 ntfy:
+# echo "HOMELAB_NTFY_URL=https://ntfy.sh/你的Topic" >> .env
+# echo "HOMELAB_NTFY_TOKEN=可选Token" >> .env
 docker compose up -d
 ```
 
-`sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。
+- **Server 酱**：`sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。
+- **ntfy**：在 `config.yaml` 中配置 `notify.provider: ntfy`，支持公网及自建实例。
 
 告警有三层防刷屏：`sustain_seconds` 持续时间门槛、`repeat_hours` 重复提醒
 间隔、以及单条告警的「忽略」（可设时长或永久，在设置页管理）。
