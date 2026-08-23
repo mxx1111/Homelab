@@ -17,6 +17,9 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from .connections import lookup_geo
+from .engine import build as engine_build
+
 log = logging.getLogger("homelab.nodes")
 
 # 连接复用。每轮采集重新握手一次 SSH 太贵（RTT 高的节点尤其明显），
@@ -181,6 +184,161 @@ def _parse_ports(lines):
     return {"exposed": len(uniq), "loopback": local, "items": uniq[:40]}
 
 
+def _parse_network(lines):
+    """节点侧已经把速率算好了（差值要跨两轮，只能在那边留状态），这里只取值。
+
+    首轮没有速率是正常的：那台机器上还没有上一次的计数可比。第二轮就有了。
+    """
+    kv = _kv(lines)
+    if not kv.get("interface"):
+        return None
+    def num(key):
+        v = kv.get(key)
+        return int(v) if v and v.lstrip("-").isdigit() else None
+    return {
+        "interface": kv["interface"],
+        "rx_bytes_per_sec": num("rx_bytes_per_sec"),
+        "tx_bytes_per_sec": num("tx_bytes_per_sec"),
+        "rx_total": num("rx_total"), "tx_total": num("tx_total"),
+        "window_seconds": num("window_seconds"),
+        "public_ip": None,      # 节点不查公网出口，那要出网请求
+    }
+
+
+def _parse_conns(lines, geo=None):
+    """ss -tnH state established 的输出。
+
+    格式是 `Recv-Q Send-Q 本地地址:端口 对端地址:端口`。按对端 IP 聚合——
+    一个爬虫开 50 条连接，列 50 行会把别的对端淹掉，聚合成一行才看得出谁在连。
+    """
+    peers, ports = {}, {}
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local, peer = parts[2], parts[3]
+        # IPv6 是 [::1]:22 这种形式，端口永远在最后一个冒号之后
+        peer_addr, _, peer_port = peer.rpartition(":")
+        local_addr, _, local_port = local.rpartition(":")
+        if not local_port.isdigit():
+            continue
+        peer_addr = peer_addr.strip("[]")
+        slot = peers.get(peer_addr) or peers.setdefault(peer_addr, {
+            "ip": peer_addr, "count": 0, "ports": set()})
+        slot["count"] += 1
+        slot["ports"].add(int(local_port))
+        ports[int(local_port)] = ports.get(int(local_port), 0) + 1
+
+    items = []
+    for p in peers.values():
+        private = _is_private(p["ip"])
+        items.append({"ip": p["ip"], "count": p["count"],
+                      "ports": sorted(p["ports"]), "private": private,
+                      "port": sorted(p["ports"])[0] if p["ports"] else None,
+                      "inbound": True, "private_peer": private})
+    items.sort(key=lambda x: -x["count"])
+    by_port = sorted(({"port": k, "conns": v, "peers": sum(
+        1 for i in items if k in i["ports"]), "service": None}
+        for k, v in ports.items()), key=lambda x: -x["conns"])[:10]
+    return {
+        "items": items[:200],
+        "total": sum(i["count"] for i in items),
+        "peers": len(items),
+        "external": sum(1 for i in items if not i["private"]),
+        "inbound": sum(i["count"] for i in items),
+        "outbound": None,        # ss 那行分不出方向，得看本地端口是不是监听端口
+        "by_port": by_port,
+        "truncated": len(items) > 200,
+        "geo": False,            # 归属在面板侧查，节点不带 GeoIP 库
+    }
+
+
+def _is_private(ip):
+    """够用就好，不引 ipaddress 处理每一种保留段——这里只是给连接分个内外网"""
+    if ":" in ip:
+        return ip.startswith(("fe80", "fc", "fd", "::1"))
+    parts = ip.split(".")
+    if len(parts) != 4 or not parts[0].isdigit():
+        return False
+    a, b = int(parts[0]), int(parts[1]) if parts[1].isdigit() else 0
+    return (a == 10 or a == 127 or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 168) or (a == 169 and b == 254)
+            or (a == 100 and 64 <= b <= 127))       # CGNAT，Tailscale 用这段
+
+
+def _parse_certs(lines, warn_days=30, crit_days=7):
+    """`名称|到期时间戳` 每行一条"""
+    items = []
+    now = time.time()
+    for line in lines:
+        name, sep, epoch = line.strip().partition("|")
+        if not sep or not epoch.strip().isdigit():
+            continue
+        days = int((int(epoch) - now) // 86400)
+        items.append({
+            "name": name, "host": name, "ok": True,
+            "days_left": days, "not_after": int(epoch),
+            "level": "crit" if days <= crit_days else "warn" if days <= warn_days else "ok",
+        })
+    if not items:
+        return None
+    items.sort(key=lambda c: c["days_left"])
+    level = "ok"
+    for c in items:
+        if c["level"] == "crit":
+            level = "crit"
+            break
+        if c["level"] == "warn":
+            level = "warn"
+    return {"items": items, "level": level}
+
+
+def _parse_smart(lines, warn_hours=35000):
+    """`设备|健康|通电小时|重分配|待处理|温度|型号` 每行一条。
+
+    判定口径和本机的 disks 采集器保持一致：重分配和待处理扇区是"当前状态"，
+    非零就是真问题；通电年限只是提醒。
+    """
+    items = []
+    for line in lines:
+        f = line.strip().split("|")
+        if len(f) < 6 or not f[0]:
+            continue
+        def num(x):
+            return int(x) if x and x.strip().isdigit() else None
+        hours, realloc, pending = num(f[2]), num(f[3]), num(f[4])
+        issues = []
+        if realloc:
+            issues.append(f"重分配扇区 {realloc}")
+        if pending:
+            issues.append(f"待处理扇区 {pending}")
+        healthy = f[1].upper() in ("PASSED", "OK")
+        if not healthy and f[1] not in ("", "unknown"):
+            issues.append(f"SMART 自评 {f[1]}")
+        if hours and hours >= warn_hours:
+            issues.append(f"已通电 {hours // 8766} 年")
+        items.append({
+            "device": f[0], "health": f[1], "hours": hours,
+            "years": round(hours / 8766, 1) if hours else None,
+            "temp_c": num(f[5]), "model": (f[6] if len(f) > 6 else "") or None,
+            "attrs": {"Reallocated_Sector_Ct": realloc or 0,
+                      "Current_Pending_Sector": pending or 0},
+            "issues": issues,
+            "level": "crit" if (realloc or pending or not healthy and f[1] not in ("", "unknown"))
+                     else "warn" if issues else "ok",
+        })
+    if not items:
+        return None
+    items.sort(key=lambda x: (-(x.get("hours") or 0), x["device"]))
+    return {
+        "items": items, "total": len(items),
+        "failing": sum(1 for i in items if i["level"] == "crit"),
+        "aging": sum(1 for i in items if i["level"] == "warn"),
+        "unavailable": [], "raids": {}, "no_redundancy": [],
+        "warn_hours": warn_hours,
+    }
+
+
 def _target(ncfg):
     host = str(ncfg.get("host") or "")
     if "@" in host:
@@ -249,10 +407,50 @@ def _collect_one(ncfg):
         } if appsec else None,
     }
     node.update(_parse_host(sec.get("HOST", [])))
+    # v5 新增的几节。老版本脚本没有这些节，取到的是空列表，parser 返回 None，
+    # 面板侧就把对应模块标成 unsupported——不会因为节点没升级而报错
+    node["network"] = _parse_network(sec.get("NETWORK", []))
+    node["connections"] = _parse_conns(sec.get("CONNS", [])) if sec.get("CONNS") else None
+    node["certs"] = _parse_certs(sec.get("CERTS", []))
+    node["smart"] = _parse_smart(sec.get("SMART", []))
+    engine_lines = sec.get("ENGINE", [])
+    if engine_lines:
+        # 和本机走同一个解析器。口径有两份实现，迟早会对不上，而对不上时
+        # 没人会发现——那才是最麻烦的
+        built = engine_build("\n".join(engine_lines))
+        node["engine"] = built if built.get("ok") else None
+    else:
+        node["engine"] = None
+    node["script_version"] = int(meta["script_version"]) if \
+        meta.get("script_version", "").isdigit() else None
     # 节点时钟偏差会让"最后采集于"这类显示变得莫名其妙，顺手量一下
     if node["collected_at"]:
         node["clock_skew_seconds"] = int(time.time()) - node["collected_at"]
     return node
+
+
+def _enrich_conn_geo(items, cfg):
+    """给所有节点的连接对端补归属地。
+
+    一次性批量查全部节点的 IP，而不是每台各查各的：ip-api 的 batch 一次最多
+    100 个，几台机器分开查就是几次请求，还各自吃一份速率限制。
+    """
+    ips = {c["ip"] for n in items for c in ((n.get("connections") or {}).get("items") or [])
+           if not c.get("private")}
+    if not ips:
+        return
+    try:
+        geo = lookup_geo(sorted(ips), cfg)
+    except Exception as exc:  # noqa: BLE001  查不到归属不该让整轮采集失败
+        log.debug("节点连接 GeoIP 查询失败: %s", exc)
+        return
+    for n in items:
+        for c in ((n.get("connections") or {}).get("items") or []):
+            info = geo.get(c["ip"]) or {}
+            c["country"] = info.get("country")
+            c["as_name"] = info.get("as_name")
+        if n.get("connections"):
+            n["connections"]["geo"] = True
 
 
 def collect(cfg):
@@ -261,6 +459,7 @@ def collect(cfg):
         return {"ok": True, "items": [], "configured": 0}
     with ThreadPoolExecutor(max_workers=min(8, len(ncfgs))) as pool:
         items = list(pool.map(_collect_one, ncfgs))
+    _enrich_conn_geo(items, cfg)
     online = sum(1 for n in items if n.get("ok"))
     return {"ok": True, "items": items, "configured": len(ncfgs),
             "online": online, "offline": len(items) - online}

@@ -117,11 +117,15 @@ firewall:
 # 安全中心只聚合现有防护，默认不会改 1Panel/OpenResty、iptables 或代理链路。
 security_center:
   enabled: true
-  # 地图默认使用随项目部署的 Natural Earth 本地简图，不依赖 VPN、Key 或外网。
-  # 只有明确配置自建/已授权的 XYZ 瓦片时才打开 external_tiles；不要直接使用
-  # 未授权的高德/百度瓦片地址。外部瓦片失败时页面仍会自动保留本地简图。
+  # 攻击态势地图。本地 Natural Earth 矢量底图随仓库分发，默认完全不出网。
   map:
+    # false = 连本地 geojson 都不加载，页面退回国家/区域排行榜，用的是同一份数据
+    enabled: true
+    # 外部瓦片默认关闭。打开才会向 tile_url 发请求——国内网络访问不到 OSM 时，
+    # 整张攻击地图会拖成空白，而那正是这个功能最该管用的场景（出了事才来看）。
+    # 打开后若瓦片连续加载失败，会自动退回本地简图，右下角有状态提示。
     external_tiles: false
+    # 开了 external_tiles 才用得上。建议换成自建或已授权的 XYZ 地址
     tile_url: ""
     attribution: ""
     max_zoom: 12
@@ -147,7 +151,7 @@ history:
   path: /app/data/homelab.db
   retain_days: 90
 
-# 告警推送。支持 Server 酱与 ntfy (provider: serverchan | ntfy)
+# 告警推送。支持 Server 酱和 ntfy 两种渠道
 notify:
   # 推送渠道: serverchan (默认) 或 ntfy
   provider: serverchan
@@ -169,6 +173,20 @@ notify:
 
   # 低于此级别不推送: info < warn < crit
   min_level: warn
+  # 封禁通知按时段汇总，不再一条一推。
+  #
+  # 一条一推在手机上太吵：被扫一轮能收几十条，而单条封禁本身几乎不需要当场
+  # 做什么——决策已经自动下发到所有节点了。攒到固定时段发一条汇总，既知道
+  # 发生了什么，又不会一直被打断。
+  #
+  # 只影响封禁通知。磁盘写满、证书到期、服务掉线这些仍然即时推送，
+  # 那些是要立刻动手的，攒到下一个时段就晚了。
+  ban_digest:
+    enabled: true
+    # 24 小时制，本地时区（容器挂了宿主机的 /etc/localtime）。
+    # 默认这三个时段的含义：早上看昨晚的，中午看上午的，睡前看白天的。
+    # 时段之间没有封禁就不发，不会每天雷打不动来三条空通知。
+    times: ["08:00", "11:30", "22:00"]
 
 alerts:
   enabled: true

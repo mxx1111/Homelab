@@ -143,6 +143,15 @@ def _crowdsec_geo(ips, cfg):
     return found
 
 
+def lookup_geo(ips, cfg):
+    """批量查 GeoIP，供本机连接和节点连接共用。
+
+    节点侧不带 GeoIP 库——每台维护一份几十 MB 的数据文件不值当，而面板这边
+    本来就有，顺带还共享同一份缓存和 ip-api 配额。
+    """
+    return _lookup_geo(ips, cfg)
+
+
 def _lookup_geo(ips, cfg):
     """批量查 GeoIP。ip-api 的 batch 接口一次最多 100 个"""
     now = time.time()

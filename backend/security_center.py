@@ -154,14 +154,20 @@ class SecurityCenter:
     def map_options(self):
         """前端底图配置。
 
-        本地 Natural Earth 矢量底图始终启用。外部瓦片必须显式打开，避免国内
-        网络访问不到默认 OSM 时，把整张攻击地图拖成空白。
+        本地 Natural Earth 矢量底图始终可用，外部瓦片必须显式打开——国内网络
+        访问不到默认 OSM 时，整张攻击地图会拖成空白，而那正是这个功能最该
+        管用的场景（出了事才来看）。这套默认值取自开源版 main。
+
+        enabled 是另一层：有人就是不想要地图，只看排行榜。关掉之后浏览器
+        连本地 geojson 都不加载。
         """
         try:
             max_zoom = max(3, min(19, int(self.map_cfg.get("max_zoom", 12))))
         except (TypeError, ValueError):
             max_zoom = 12
         return {
+            "enabled": bool(self.map_cfg.get("enabled", True)),
+            # 默认 false：不打开就一次外部请求都不会发
             "external_tiles": bool(self.map_cfg.get("external_tiles", False)),
             "tile_url": str(self.map_cfg.get("tile_url") or ""),
             "attribution": str(self.map_cfg.get("attribution") or ""),

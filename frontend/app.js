@@ -1,1351 +1,23 @@
-/* Homelab 面板前端。无构建、无依赖，图表是手写 SVG。 */
-
-const $ = id => document.getElementById(id);
-
-/* 会话过期的统一处理。
-   包一层 fetch 而不是在二十来个调用点各写一遍 401 分支：那样不但啰嗦，
-   以后新加的接口还会漏掉，表现成"页面某一块默默空着"。
-   放在文件最顶上，保证后面所有代码拿到的都是包过的版本。 */
-const _fetch = window.fetch.bind(window);
-window.fetch = async (...args) => {
-  const res = await _fetch(...args);
-  const url = String(args[0] || "");
-  if (res.status === 401 && url.startsWith("/api/") && !url.startsWith("/api/auth/")) {
-    showLogin();
-  }
-  return res;
-};
-const esc = s => String(s ?? "").replace(/[<>&"]/g, c =>
-  ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
-
-/* CrowdSec 返回的是 ISO 3166-1 两位码。表里没有的直接显示原码，
-   不做兜底翻译——显示 "ZZ" 至少是准确的，猜错国家更糟 */
-const COUNTRY = {
-  CN:"中国", HK:"中国香港", TW:"中国台湾", MO:"中国澳门",
-  US:"美国", RU:"俄罗斯", DE:"德国", NL:"荷兰", GB:"英国", FR:"法国",
-  JP:"日本", KR:"韩国", SG:"新加坡", IN:"印度", BR:"巴西", VN:"越南",
-  CA:"加拿大", AU:"澳大利亚", IT:"意大利", ES:"西班牙", TH:"泰国",
-  ID:"印尼", MY:"马来西亚", PH:"菲律宾", TR:"土耳其", UA:"乌克兰",
-  PL:"波兰", RO:"罗马尼亚", SE:"瑞典", CH:"瑞士", IR:"伊朗", IQ:"伊拉克",
-  PK:"巴基斯坦", BD:"孟加拉", EG:"埃及", ZA:"南非", MX:"墨西哥",
-  AR:"阿根廷", CL:"智利", CO:"哥伦比亚", PE:"秘鲁", VE:"委内瑞拉",
-  NG:"尼日利亚", KE:"肯尼亚", MA:"摩洛哥", DZ:"阿尔及利亚",
-  SA:"沙特", AE:"阿联酋", IL:"以色列", QA:"卡塔尔", KW:"科威特",
-  FI:"芬兰", NO:"挪威", DK:"丹麦", BE:"比利时", AT:"奥地利",
-  CZ:"捷克", HU:"匈牙利", GR:"希腊", PT:"葡萄牙", IE:"爱尔兰",
-  NZ:"新西兰", LT:"立陶宛", LV:"拉脱维亚", EE:"爱沙尼亚",
-  BG:"保加利亚", RS:"塞尔维亚", HR:"克罗地亚", SK:"斯洛伐克",
-  SI:"斯洛文尼亚", MD:"摩尔多瓦", BY:"白俄罗斯", KZ:"哈萨克斯坦",
-  UZ:"乌兹别克", GE:"格鲁吉亚", AM:"亚美尼亚", AZ:"阿塞拜疆",
-  LU:"卢森堡", IS:"冰岛", MT:"马耳他", CY:"塞浦路斯", PA:"巴拿马",
-  SC:"塞舌尔", BZ:"伯利兹", VG:"英属维尔京", KY:"开曼", LI:"列支敦士登",
-  NP:"尼泊尔", LK:"斯里兰卡", MM:"缅甸", KH:"柬埔寨", LA:"老挝",
-  MN:"蒙古", BN:"文莱", MV:"马尔代夫", AF:"阿富汗", SY:"叙利亚",
-};
-
-/* 国家标签点来自 Natural Earth 1:50m Admin 0 Countries（公共领域）。仅当
-   旧版 CrowdSec 没有经纬度字段时，作为 Leaflet 国家聚合点的降级坐标。 */
-const COUNTRY_POINT = {
-  AD:[1.54,42.55],AE:[54.55,23.47],AF:[66.5,34.16],AG:[-61.79,17.35],AI:[-63.03,18.24],
-  AL:[20.11,40.65],AM:[44.8,40.46],AO:[17.98,-12.18],AQ:[35.89,-79.84],AR:[-64.17,-33.5],
-  AS:[-170.75,-14.33],AT:[14.13,47.52],AU:[134.05,-24.13],AW:[-69.97,12.52],AX:[19.87,60.16],
-  AZ:[47.21,40.4],BA:[18.07,44.09],BB:[-59.57,13.16],BD:[89.68,24.21],BE:[4.8,50.79],
-  BF:[-1.36,12.67],BG:[25.16,42.51],BH:[50.55,26.06],BI:[29.92,-3.33],BJ:[2.35,10.32],
-  BL:[-62.83,17.9],BM:[-64.76,32.3],BN:[114.55,4.45],BO:[-64.59,-16.67],BR:[-49.56,-12.1],
-  BS:[-77.15,26.4],BT:[90.04,27.54],BW:[24.18,-22.1],BY:[28.42,53.82],BZ:[-88.71,17.2],
-  CA:[-101.91,60.32],CD:[23.46,-1.86],CF:[20.91,6.99],CG:[15.9,.14],CH:[7.46,46.72],
-  CI:[-5.57,7.49],CK:[-159.79,-21.22],CL:[-72.32,-38.15],CM:[12.47,4.59],CN:[106.34,32.5],
-  CO:[-73.17,3.37],CR:[-84.08,10.07],CU:[-77.98,21.33],CV:[-23.64,15.07],CW:[-68.92,12.15],
-  CY:[33.08,34.91],CZ:[15.38,49.88],DE:[9.68,50.96],DJ:[42.5,11.98],DK:[9.02,55.97],
-  DM:[-61.34,15.46],DO:[-70.65,19.1],DZ:[2.81,27.4],EC:[-78.19,-1.26],EE:[25.87,58.72],
-  EG:[29.45,26.19],EH:[-12.63,23.97],ER:[38.29,15.79],ES:[-3.46,40.09],ET:[39.09,8.03],
-  FI:[27.28,63.25],FJ:[177.98,-17.83],FK:[-58.74,-51.61],FM:[158.23,6.89],FO:[-7.06,62.19],
-  FR:[2.2,46.2],GA:[11.84,-.44],GB:[-2.12,54.4],GD:[-61.68,12.11],GE:[43.74,41.87],
-  GG:[-2.56,49.46],GH:[-1.04,7.72],GL:[-39.34,74.32],GM:[-15,13.64],GN:[-10.02,10.62],
-  GQ:[8.99,2.33],GR:[21.73,39.49],GS:[-31.06,-55.68],GT:[-90.5,14.98],GU:[144.7,13.35],
-  GW:[-14.52,12.16],GY:[-58.94,5.12],HK:[114.1,22.45],HM:[73.51,-53.1],HN:[-86.89,14.79],
-  HR:[16.37,45.81],HT:[-72.22,19.26],HU:[19.45,47.09],ID:[101.89,-.95],IE:[-7.8,53.08],
-  IL:[34.85,30.91],IM:[-4.53,54.22],IN:[79.36,22.69],IO:[71.35,-6.19],IQ:[43.26,33.09],
-  IR:[54.93,32.17],IS:[-18.67,64.78],IT:[11.08,44.73],JE:[-2.09,49.22],JM:[-77.32,18.14],
-  JO:[36.38,30.81],JP:[138.44,36.14],KE:[37.91,.55],KG:[74.53,41.67],KH:[104.5,12.65],
-  KI:[-157.38,1.82],KM:[43.32,-11.73],KN:[-62.76,17.34],KP:[126.44,39.89],KR:[128.13,36.38],
-  KW:[47.31,29.41],KY:[-81.24,19.32],KZ:[68.69,49.05],LA:[102.53,19.43],LB:[35.99,34.13],
-  LC:[-60.98,13.89],LI:[9.56,47.11],LK:[80.7,7.58],LR:[-9.46,6.45],LS:[28.25,-29.48],
-  LT:[24.09,55.1],LU:[6.08,49.73],LV:[25.46,57.07],LY:[18.01,26.64],MA:[-7.19,31.65],
-  MC:[7.4,43.74],MD:[28.49,47.43],ME:[19.14,42.8],MF:[-63.05,18.08],MG:[46.7,-18.63],
-  MH:[171.19,7.08],MK:[21.56,41.56],ML:[-2.04,18.69],MM:[95.8,21.57],MN:[104.15,46],
-  MO:[113.56,22.13],MP:[145.73,15.19],MR:[-9.74,19.59],MS:[-62.19,16.74],MT:[14.43,35.89],
-  MU:[57.57,-20.3],MV:[73.51,4.17],MW:[33.61,-13.39],MX:[-102.29,23.92],MY:[113.84,2.53],
-  MZ:[37.84,-13.94],NA:[17.11,-20.58],NC:[165.08,-21.06],NE:[9.5,17.45],NF:[167.95,-29.03],
-  NG:[7.5,9.44],NI:[-85.07,12.67],NL:[5.61,52.42],NO:[9.6,61.3],NP:[83.64,28.3],
-  NR:[166.93,-.52],NU:[-169.86,-19.05],NZ:[172.79,-39.76],OM:[57.34,22.12],PA:[-80.35,8.72],
-  PE:[-72.9,-12.98],PF:[-149.46,-17.63],PG:[143.91,-5.7],PH:[122.47,11.2],PK:[68.55,29.33],
-  PL:[19.49,51.99],PM:[-56.33,47.04],PN:[-128.32,-24.36],PR:[-66.48,18.23],PS:[35.29,32.05],
-  PT:[-8.27,39.61],PW:[134.58,7.52],PY:[-60.15,-21.67],QA:[51.14,25.24],RO:[24.97,45.73],
-  RS:[20.79,44.19],RU:[44.69,58.25],RW:[30.1,-1.9],SA:[44.7,23.81],SB:[159.17,-8.03],
-  SC:[55.48,-4.68],SD:[29.26,16.33],SE:[19.02,65.86],SG:[103.82,1.37],SH:[-5.71,-15.95],
-  SI:[14.92,46.06],SK:[19.05,48.73],SL:[-11.76,8.62],SM:[12.44,43.93],SN:[-14.78,15.14],
-  SO:[45.19,3.57],SR:[-55.91,4.14],SS:[30.39,7.23],ST:[7.02,.97],SV:[-88.89,13.69],
-  SX:[-63.07,18.04],SY:[38.28,35.01],SZ:[31.47,-26.53],TC:[-71.75,21.82],TD:[18.65,15.14],
-  TF:[69.12,-49.3],TG:[1.06,8.81],TH:[101.07,15.46],TJ:[72.59,38.2],TL:[125.85,-8.8],
-  TM:[58.68,39.86],TN:[9.01,33.69],TO:[-175.16,-21.21],TR:[34.51,39.35],TT:[-60.92,11],
-  TV:[179.21,-8.51],TW:[120.87,23.65],TZ:[34.96,-6.05],UA:[32.14,49.72],UG:[32.95,1.97],
-  US:[-97.48,39.54],UY:[-55.97,-32.96],UZ:[64.01,41.69],VA:[12.45,41.9],VC:[-61.34,13.09],
-  VE:[-64.6,7.18],VG:[-64.64,18.43],VI:[-64.78,17.75],VN:[105.39,21.72],VU:[166.91,-15.37],
-  WF:[-178.14,-14.29],WS:[-172.44,-13.64],XK:[20.9,42.6],YE:[45.87,15.33],ZA:[23.67,-29.71],
-  ZM:[26.4,-14.66],ZW:[29.93,-18.91],
-};
-/* 机器名 -> 固定色调。同一台机器在所有卡片里颜色一致，
-   多机场景下扫一眼就能归类，不用逐行读文字 */
-function machineTone(name) {
-  let h = 0;
-  for (const ch of String(name || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return h % 4;
-}
-const machineTag = (name, cls = "") => name
-  ? `<span class="tag mch m${machineTone(name)}${cls ? " " + cls : ""}">${esc(name)}</span>`
-  : "";
-
-const cname = code => {
-  const c = String(code || "").trim().toUpperCase();
-  if (!c || c === "??") return "未知";
-  return COUNTRY[c] || c;
-};
-
-/* ================= 格式化 ================= */
-
-const fmtBytes = n => {
-  if (n === null || n === undefined) return "—";
-  const u = ["B","KB","MB","GB","TB","PB"]; let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return n.toFixed(i === 0 ? 0 : (n < 10 ? 2 : 1)) + " " + u[i];
-};
-const fmtRate = n => n == null ? "—" : fmtBytes(n) + "/s";
-const fmtDur = s => {
-  if (s == null) return "—";
-  const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
-  if (d) return `${d} 天 ${h} 小时`;
-  if (h) return `${h} 小时 ${m} 分`;
-  return `${m} 分`;
-};
-const fmtShort = s => {
-  if (s == null) return "—";
-  const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
-  if (d) return `${d}天`;
-  if (h) return `${h}小时`;
-  if (m) return `${m}分`;
-  return `${Math.round(s)}秒`;
-};
-const fmtLeft = s => {
-  if (s == null) return "—";
-  if (s <= 0) return "即将到期";
-  const d = Math.floor(s/86400);
-  if (d > 365) return "永久";
-  return fmtShort(s);
-};
-const ago = ts => {
-  if (!ts) return "—";
-  const s = Math.max(0, Date.now()/1000 - ts);
-  if (s < 60) return Math.floor(s) + " 秒前";
-  if (s < 3600) return Math.floor(s/60) + " 分钟前";
-  if (s < 86400) return Math.floor(s/3600) + " 小时前";
-  return Math.floor(s/86400) + " 天前";
-};
-const agoHours = h => h == null ? "—"
-  : h < 1 ? Math.round(h*60) + " 分钟前"
-  : h < 24 ? Math.round(h) + " 小时前"
-  : Math.round(h/24) + " 天前";
-const clock = ts => {
-  const d = new Date(ts * 1000);
-  const p = n => String(n).padStart(2, "0");
-  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-const hm = ts => {
-  const d = new Date(ts * 1000);
-  return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
-};
-// 起止同一天就不重复写日期
-const timeSpan = (a, b) => new Date(a*1000).toDateString() === new Date(b*1000).toDateString()
-  ? `${clock(a)} → ${hm(b)}` : `${clock(a)} → ${clock(b)}`;
-const pctClass = p => p >= 90 ? "crit" : p >= 80 ? "warn" : "";
-
-function toast(title, msg, isErr) {
-  const el = document.createElement("div");
-  el.className = "toast" + (isErr ? " err" : "");
-  el.innerHTML = `<b>${esc(title)}</b>${msg ? `<span>${esc(msg)}</span>` : ""}`;
-  $("toasts").appendChild(el);
-  setTimeout(() => {
-    el.style.transition = "opacity .3s"; el.style.opacity = "0";
-    setTimeout(() => el.remove(), 300);
-  }, isErr ? 7000 : 4000);
-}
-
-function card(title, dotClass, bodyHtml, cls) {
-  return `<div class="card${cls ? " " + cls : ""}">
-    <h2><span class="dot ${dotClass}"></span>${title}</h2>${bodyHtml}</div>`;
-}
-function fail(sec, title) {
-  return card(title, "crit",
-    `<div class="empty">${esc(sec?.error || sec?.data?.error || "暂无数据")}</div>`);
-}
-
-/* ================= SVG 图表 =================
-   viewBox 固定 100x H，配 preserveAspectRatio="none" 横向拉满容器；
-   线宽用 vector-effect 抵消拉伸变形，刻度文字走 HTML 不进 SVG。 */
-
-function svgPath(points, h, lo, hi) {
-  const n = points.length;
-  const span = (hi - lo) || 1;
-  const x = i => n === 1 ? 50 : (i / (n - 1)) * 100;
-  const y = v => h - ((v - lo) / span) * h;
-  let line = "", area = `M 0,${h} `;
-  points.forEach((p, i) => {
-    const cmd = i === 0 ? "M" : "L";
-    line += `${cmd} ${x(i).toFixed(2)},${y(p.avg).toFixed(2)} `;
-    area += `L ${x(i).toFixed(2)},${y(p.avg).toFixed(2)} `;
-  });
-  area += `L 100,${h} Z`;
-  return {line, area};
-}
-
-function sparkline(points, opts = {}) {
-  if (!points || points.length < 2) {
-    return `<div class="chart-empty" style="height:34px">${opts.emptyText || "暂无历史"}</div>`;
-  }
-  const h = 30;
-  const vals = points.map(p => p.avg);
-  // 缩略图只画线不画面积：从 0 起填的话，CPU 在 10~20% 波动时整块都是色块，
-  // 看不出趋势。纵轴也贴合数据实际范围而不是从 0 开始，波动才看得见
-  const lo = Math.min(...vals), hi = Math.max(...vals);
-  const pad = (hi - lo) * 0.18 || Math.abs(hi) * 0.1 || 1;
-  const {line} = svgPath(points, h, lo - pad, hi + pad);
-  return `<svg class="chart spark" viewBox="0 0 100 ${h}" preserveAspectRatio="none">
-    <path class="line" d="${line}" vector-effect="non-scaling-stroke"/>
-  </svg>`;
-}
-
-/* 同单位的指标画进一张图。单条线时填面积，多条线只画线——
-   半透明面积叠在一起会互相盖住，反而看不清哪条是哪条。
-   x 轴按时间戳映射而不是数组下标：各系列的采样点数未必一样，
-   按下标画会让两条线在时间上错位。 */
-function chart(list, opts = {}) {
-  const fmt = opts.fmt || (v => v.toFixed(1));
-  const series = (Array.isArray(list) ? list : [{points: list}])
-    .filter(s => (s.points || []).length >= 2);
-  if (!series.length) {
-    return `<div class="chart-empty">${opts.emptyText ||
-      "还没有足够的历史数据，采集满一段时间后出现"}</div>`;
-  }
-  const h = 60;
-  const all = series.flatMap(s => s.points);
-  const t0 = Math.min(...all.map(p => p.ts)), t1 = Math.max(...all.map(p => p.ts));
-  const vals = all.map(p => p.avg);
-  const rawHi = Math.max(...vals), rawLo = Math.min(...vals);
-
-  /* 纵轴贴合数据范围，但强制一个最小跨度。
-     锁死 0-100% 的话，常年 31%~49% 的存储曲线全挤在底部、上面六成空着；
-     可纯按数据缩放又会把 0.1% 的抖动撑满整张图，看着像盘要炸了。
-     minSpan 是这两者的分界：波动小于它，图就该是平的，因为它本来就平。 */
-  const minSpan = opts.minSpan || 0;
-  let lo, hi;
-  if (opts.min != null && opts.max != null) {
-    lo = opts.min; hi = opts.max;
-  } else {
-    const pad = (rawHi - rawLo) * .18 || Math.abs(rawHi) * .1 || 1;
-    lo = rawLo - pad; hi = rawHi + pad;
-    const short = minSpan - (hi - lo);
-    if (short > 0) { lo -= short / 2; hi += short / 2; }
-    // 撞到数值天花板时把跨度推给另一侧，别把图压扁
-    if (opts.floor != null && lo < opts.floor) {
-      hi += opts.floor - lo; lo = opts.floor;
-    }
-    if (opts.ceil != null && hi > opts.ceil) {
-      lo -= hi - opts.ceil; hi = opts.ceil;
-      if (opts.floor != null) lo = Math.max(opts.floor, lo);
-    }
-    if (opts.min != null) lo = opts.min;
-    if (opts.max != null) hi = opts.max;
-  }
-  const span = (hi - lo) || 1, tspan = (t1 - t0) || 1;
-  const px = ts => (((ts - t0) / tspan) * 100).toFixed(2);
-  const py = v => (h - ((v - lo) / span) * h).toFixed(2);
-
-  const paths = series.map((s, i) => {
-    const d = s.points.map((p, j) => `${j ? "L" : "M"} ${px(p.ts)},${py(p.avg)}`).join(" ");
-    if (series.length === 1) {
-      const pts = s.points;
-      const area = `M ${px(pts[0].ts)},${h} ` +
-        pts.map(p => `L ${px(p.ts)},${py(p.avg)}`).join(" ") +
-        ` L ${px(pts[pts.length - 1].ts)},${h} Z`;
-      return `<path class="area" d="${area}"/>
-        <path class="line" d="${d}" vector-effect="non-scaling-stroke"/>`;
-    }
-    return `<path class="line s${i}" d="${d}" vector-effect="non-scaling-stroke"/>`;
-  }).join("");
-
-  const gridY = [0.25, 0.5, 0.75].map(f =>
-    `<line class="grid-line" x1="0" x2="100" y1="${(h*f).toFixed(1)}"
-      y2="${(h*f).toFixed(1)}" vector-effect="non-scaling-stroke"/>`).join("");
-
-  // 所有数字统一挂在图例行：单线走同一套排版，不再是"单线看右上角、
-  // 多线看左下角"两种规矩。时间范围由区块标题统一给出，图里不再重复
-  const legend = `<div class="legend">${series.map((s, i) => {
-    const pts = s.points, cur = pts[pts.length - 1].avg;
-    const peak = Math.max(...pts.map(p => p.avg));
-    return `<span class="s${i}"><i></i>${esc(s.name || "")}<b>${fmt(cur)}</b>
-      <em>峰 ${fmt(peak)}</em></span>`;
-  }).join("")}</div>`;
-
-  return `<div class="chartbox">
-    <div class="hint" title="纵轴范围">${fmt(lo)} – ${fmt(hi)}</div>
-    ${legend}
-    <svg class="chart" viewBox="0 0 100 ${h}" preserveAspectRatio="none"
-         style="height:${opts.height || 128}px">
-      ${gridY}
-      ${paths}
-    </svg>
-  </div>`;
-}
-
-/* ================= 总览 ================= */
-
-function renderSecurity(sec) {
-  const d = sec?.data;
-  if (!d) return fail(sec, "安全态势");
-  const c = d.ban_counts || {};
-  const alerts = d.alerts_24h ?? 0;
-  const dot = alerts > 5 ? "crit" : alerts > 0 ? "warn" : "ok";
-  const recent = (d.alerts || []).slice(0, 7).map(a => `
-    <div class="row">
-      <span class="k"><span class="mono">${esc(a.ip || "?")}</span>
-        ${a.country ? `<span class="tag">${esc(cname(a.country))}</span>` : ""}
-        <span class="tag" title="${esc(a.scenario||"")}">${
-          esc(a.scenario_cn || (a.scenario||"").split("/").pop())}</span>
-        ${machineTag(a.machine)}</span>
-      <span class="v dim">${agoHours(a.age_hours)}</span>
-    </div>`).join("");
-  return card("安全态势", dot, `
-    <div class="stats">
-      <div class="stat"><div class="n">${d.active_bans ?? 0}</div><div class="l">当前封禁</div></div>
-      <div class="stat"><div class="n" style="color:${alerts?"var(--warn)":"inherit"}">${alerts}</div>
-        <div class="l">24h 告警</div></div>
-      <div class="stat"><div class="n">${c.manual ?? 0}</div><div class="l">手动封禁</div></div>
-    </div>
-    ${recent ? `<div class="list">${recent}</div>`
-             : `<div class="empty center">近期无攻击</div>`}`);
-}
-
-function renderStorage(sec, growth) {
-  const d = sec?.data;
-  if (!d?.volumes) return fail(sec, "存储");
-  const rows = d.volumes.map(v => {
-    if (!v.ok) return `<div class="row"><span class="k">${esc(v.label)}</span>
-      <span class="v dim">${esc(v.error || "不可用")}</span></div>`;
-    const snap = v.snapshot_count != null
-      ? `<span class="tag">${v.snapshot_count} 快照</span>` : "";
-    const g = growth?.[v.label];
-    const pred = (g && !g.insufficient && g.days_to_full != null)
-      ? `<span class="tag ${g.days_to_full < 30 ? "warn" : ""}">约 ${g.days_to_full} 天写满</span>`
-      : "";
-    return `<div style="padding:8px 0">
-      <div class="row" style="border:none; padding:0 0 3px">
-        <span class="k"><span>${esc(v.label)}</span>${snap}${pred}</span>
-        <span class="v">${fmtBytes(v.free)} 可用<span class="unit">/ ${fmtBytes(v.total)}</span></span>
-      </div>
-      <div class="bar"><i class="${pctClass(v.percent)}" style="width:${Math.min(100,v.percent)}%"></i></div>
-      <div class="sub" style="margin:0">已用 ${v.percent}%</div>
-    </div>`;
-  }).join("");
-  return card("存储", d.level === "crit" ? "crit" : d.level === "warn" ? "warn" : "ok", rows);
-}
-
-function renderServices(sec) {
-  const d = sec?.data;
-  if (!d?.items) return fail(sec, "服务健康");
-  const rows = d.items.map(s => `
-    <div class="row">
-      <span class="k"><span class="dot ${s.ok?"ok":"crit"}"></span><span>${esc(s.name)}</span></span>
-      <span class="v ${s.ok?"":"dim"}">${s.ok ? s.latency_ms + " ms"
-        : esc(s.error || s.status_code || "异常")}</span>
-    </div>`).join("");
-  return card("服务健康", d.down > 0 ? "crit" : "ok", `
-    <div class="stats">
-      <div class="stat"><div class="n" style="color:var(--ok)">${d.up}</div><div class="l">正常</div></div>
-      <div class="stat"><div class="n" style="color:${d.down?"var(--crit)":"var(--faint)"}">${d.down}</div>
-        <div class="l">异常</div></div>
-    </div><div class="list">${rows}</div>`);
-}
-
-function renderHost(sec, series) {
-  const d = sec?.data;
-  if (!d?.ok) return fail(sec, siteName);
-  const m = d.memory || {}, load1 = d.load?.[0];
-  const loadPct = load1 != null && d.cpu_cores ? load1 / d.cpu_cores * 100 : null;
-  const dot = (m.percent >= 90 || (loadPct != null && loadPct >= 100)) ? "warn" : "ok";
-  return card(siteName, dot, `
-    <div class="big">${d.cpu_percent ?? "—"}<span class="unit">% CPU</span></div>
-    ${sparkline(series?.cpu, {min: 0, emptyText: "CPU 历史采集中"})}
-    <div class="sub">${d.cpu_cores} 核 · 负载 ${d.load ? d.load.map(x=>x.toFixed(2)).join(" / ") : "—"}</div>
-    <div style="margin-top:11px">
-      <div class="row" style="border:none; padding:0 0 3px">
-        <span class="k"><span>内存</span></span>
-        <span class="v">${fmtBytes(m.used)} <span class="unit">/ ${fmtBytes(m.total)}</span></span>
-      </div>
-      <div class="bar"><i class="${pctClass(m.percent)}" style="width:${m.percent||0}%"></i></div>
-    </div>
-    <div class="row"><span class="k"><span>运行时长</span></span>
-      <span class="v">${fmtDur(d.uptime_seconds)}</span></div>
-    ${d.temperature != null ? `<div class="row"><span class="k"><span>温度</span></span>
-      <span class="v">${d.temperature} °C</span></div>` : ""}`);
-}
-
-function renderNetwork(sec, series) {
-  const d = sec?.data;
-  if (!d?.ok) return fail(sec, "网络");
-  return card("网络", "info", `
-    <div class="stats">
-      <div class="stat"><div class="n" style="font-size:19px">${fmtRate(d.rx_bytes_per_sec)}</div>
-        <div class="l">下行</div></div>
-      <div class="stat"><div class="n" style="font-size:19px">${fmtRate(d.tx_bytes_per_sec)}</div>
-        <div class="l">上行</div></div>
-    </div>
-    ${sparkline(series?.net_rx, {min: 0, emptyText: "流量历史采集中"})}
-    <div class="row"><span class="k"><span>网卡</span></span><span class="v">${esc(d.interface)}</span></div>
-    <div class="row"><span class="k"><span>公网 IP</span></span>
-      <span class="v mono">${esc(d.public_ip || "—")}</span></div>
-    <div class="row"><span class="k"><span>累计收/发</span></span>
-      <span class="v">${fmtBytes(d.rx_total)} / ${fmtBytes(d.tx_total)}</span></div>`);
-}
-
-function renderCerts(sec) {
-  const d = sec?.data;
-  if (!d?.items) return fail(sec, "证书");
-
-  // 按剩余天数升序：域名一多，配置顺序就没意义了，最紧急的必须在最上面。
-  // 读不到的排最前——那是比"快过期"更需要立刻看的状态
-  const items = [...d.items].sort((a, b) =>
-    (a.ok ? (a.days_left ?? 9999) : -1) - (b.ok ? (b.days_left ?? 9999) : -1));
-  const urgent = items.filter(c => !c.ok || c.level === "crit" || c.level === "warn");
-  const calm = items.filter(c => c.ok && c.level === "ok");
-  // 异常的全列，正常的补到 7 行为止，剩下的收成一句话
-  const show = urgent.concat(calm.slice(0, Math.max(0, 7 - urgent.length)));
-  const hidden = items.length - show.length;
-
-  const rows = show.map(c => {
-    // 显示配置里的目标域名而不是证书 subject：用了通配符证书之后，
-    // 一堆站点的 subject 全是同一个 *.example.com，光看它分不清是哪个
-    const name = String(c.target || "").replace(/:443$/, "");
-    if (!c.ok) return `<div class="row">
-      <span class="k"><span>${esc(name)}</span></span>
-      <span class="v"><span class="tag crit">读不到</span></span></div>`;
-    const cls = c.level === "crit" ? "crit" : c.level === "warn" ? "warn" : "ok";
-    return `<div class="row" title="${esc(c.subject || "")}　${esc(c.expires_at || "")}">
-      <span class="k"><span>${esc(name)}</span>
-        ${c.chain_valid ? "" : '<span class="tag warn">链不完整</span>'}</span>
-      <span class="v"><span class="tag ${cls}">${c.days_left} 天</span></span>
-    </div>`;
-  }).join("");
-
-  const bad = items.filter(c => !c.ok).length;
-  const crit = items.filter(c => c.ok && c.level === "crit").length;
-  const warn = items.filter(c => c.ok && c.level === "warn").length;
-  const head = `<div class="stats">
-    <div class="stat"><div class="n">${items.length}</div><div class="l">监控中</div></div>
-    ${warn ? `<div class="stat"><div class="n" style="color:var(--warn)">${warn}</div>
-      <div class="l">30 天内</div></div>` : ""}
-    ${crit ? `<div class="stat"><div class="n" style="color:var(--crit)">${crit}</div>
-      <div class="l">7 天内</div></div>` : ""}
-    ${bad ? `<div class="stat"><div class="n" style="color:var(--crit)">${bad}</div>
-      <div class="l">读不到</div></div>` : ""}
-  </div>`;
-  const tail = hidden > 0
-    ? `<div class="note">其余 ${hidden} 张均在 ${calm[Math.max(0, 7 - urgent.length) - 1]?.days_left ?? 30} 天以上</div>`
-    : "";
-  return card("证书到期",
-    d.level === "crit" ? "crit" : d.level === "warn" ? "warn" : "ok",
-    head + rows + tail);
-}
-
-function renderPortsCard(sec) {
-  const d = sec?.data;
-  if (!d?.ok) return fail(sec, "端口暴露");
-  const c = d.counts || {};
-  const dot = c.public > 0 ? "warn" : "ok";
-  const pub = (d.items || []).filter(x => x.level === "public").slice(0, 6).map(x => `
-    <div class="row">
-      <span class="k"><span class="mono">${x.port}</span>
-        <span>${esc(x.owner || x.container || "未识别")}</span></span>
-      <span class="v"><span class="tag warn">公网</span></span>
-    </div>`).join("");
-  return card("端口暴露", dot, `
-    <div class="stats">
-      <div class="stat"><div class="n" style="color:${c.public?"var(--warn)":"var(--faint)"}">${c.public ?? 0}</div>
-        <div class="l">公网</div></div>
-      <div class="stat"><div class="n">${c.lan ?? 0}</div><div class="l">内网</div></div>
-      <div class="stat"><div class="n" style="color:var(--ok)">${c.safe ?? 0}</div>
-        <div class="l">仅本机</div></div>
-    </div>
-    ${pub ? `<div class="list">${pub}</div>` : `<div class="empty center">无公网暴露端口</div>`}`);
-}
-
-function renderConnCard(sec) {
-  const d = sec?.data;
-  if (!d?.ok) return fail(sec, "活跃连接");
-  const ext = (d.items || []).filter(x => !x.private && x.inbound).slice(0, 7);
-  return card("活跃连接", d.external > 0 ? "info" : "ok", `
-    <div class="stats">
-      <div class="stat"><div class="n">${d.total}</div><div class="l">总连接</div></div>
-      <div class="stat"><div class="n" style="color:${d.external?"var(--accent)":"var(--faint)"}">${d.external}</div>
-        <div class="l">外部对端</div></div>
-      <div class="stat"><div class="n">${d.inbound}</div><div class="l">入站</div></div>
-    </div>
-    ${ext.length ? `<div class="list">${ext.map(x => `
-      <div class="row">
-        <span class="k"><span class="mono">${esc(x.ip)}</span>
-          ${x.country ? `<span class="tag">${esc(cname(x.country))}</span>` : ""}
-          <span class="tag">:${x.port}</span></span>
-        <span class="v dim">${x.count} 条</span>
-      </div>`).join("")}</div>`
-    : `<div class="empty center">当前无外部入站连接</div>`}`);
-}
-
-function renderDisksCard(sec) {
-  const d = sec?.data;
-  if (!d?.ok) return fail(sec, "硬盘健康");
-  const dot = d.failing ? "crit" : d.aging ? "warn" : "ok";
-  const rows = (d.items || []).map(x => {
-    const cls = x.level === "crit" ? "crit" : x.level === "warn" ? "warn" : "ok";
-    return `<div class="row">
-      <span class="k"><span class="mono" style="color:var(--text)">${esc(x.device)}</span>
-        <span style="font-size:12px">${esc((x.model || "").slice(0, 18))}</span>
-        ${x.issues?.length ? `<span class="tag crit">${esc(x.issues[0])}</span>` : ""}
-        ${x.stale_note ? `<span class="tag" title="${esc(x.stale_note)}">旧错误</span>` : ""}</span>
-      <span class="v"><span class="tag ${cls}">${
-        x.years != null ? x.years + " 年" : "—"}</span>${
-        x.temp != null ? ` <span class="v dim">${x.temp}°C</span>` : ""}</span>
-    </div>`;
-  }).join("");
-  const noRedund = (d.no_redundancy || []).length;
-  return card("硬盘健康", dot, `
-    <div class="stats">
-      <div class="stat"><div class="n">${d.total}</div><div class="l">块硬盘</div></div>
-      <div class="stat"><div class="n" style="color:${d.failing?"var(--crit)":"var(--faint)"}">${d.failing}</div>
-        <div class="l">有坏道</div></div>
-      <div class="stat"><div class="n" style="color:${d.aging?"var(--warn)":"var(--faint)"}">${d.aging}</div>
-        <div class="l">高龄</div></div>
-    </div>
-    <div class="list">${rows}</div>
-    ${noRedund ? `<div class="note"><b style="color:var(--warn)">${noRedund} 个阵列无冗余</b>：
-      mdstat 里显示 raid1，但都是 [1/1] 单成员，只是为了以后能加盘扩容。
-      任一盘故障即丢数据。</div>` : ""}
-    ${(d.items || []).filter(x => x.stale_note).map(x =>
-      `<div class="note">${esc(x.device)}：${esc(x.stale_note)}——
-       坏道没有扩散，不计入告警</div>`).join("")}
-    ${d.unavailable?.length ? `<div class="note">读不到 SMART：${
-      d.unavailable.map(esc).join("、")}</div>` : ""}`);
-}
-
-function renderEngineCard(sec) {
-  const d = sec?.data;
-  if (!d?.ok) return fail(sec, "防护引擎");
-  const wasted = (d.wasted_sources || []).length;
-  const top = (d.sources || []).slice(0, 4).map(s => `
-    <div class="row">
-      <span class="k"><span>${esc(s.name)}</span>
-        ${s.wasted ? '<span class="tag crit">白读</span>' : ""}</span>
-      <span class="v dim">${s.lines.toLocaleString()} 行 ${
-        s.parse_rate === null ? "" : `· ${s.parse_rate}%`}</span>
-    </div>`).join("");
-  return card("防护引擎", wasted ? "warn" : "ok", `
-    <div class="stats">
-      <div class="stat"><div class="n">${d.effective_sources}<span class="unit">/${(d.sources||[]).length}</span></div>
-        <div class="l">有效日志源</div></div>
-      <div class="stat"><div class="n">${d.overflowed_total}</div><div class="l">确认攻击</div></div>
-      <div class="stat"><div class="n" style="color:${wasted?"var(--warn)":"var(--faint)"}">${wasted}</div>
-        <div class="l">白读源</div></div>
-    </div>
-    <div class="list">${top}</div>`);
-}
-
-function renderContainersCard(sec) {
-  const d = sec?.data;
-  if (!d?.items) return fail(sec, "容器");
-  const rows = d.items.slice(0, 14).map(c => `
-    <div class="row">
-      <span class="k"><span class="dot ${c.running?"ok":""}"></span><span>${esc(c.name)}</span></span>
-      <span class="v ${c.running?"":"dim"}">${c.running
-        ? (c.cpu_percent != null ? c.cpu_percent.toFixed(1) + "% · " : "") + fmtBytes(c.memory_bytes)
-        : "已停止"}</span>
-    </div>`).join("");
-  return card("Docker 容器", d.stopped > 0 ? "warn" : "ok", `
-    <div class="stats">
-      <div class="stat"><div class="n" style="color:var(--ok)">${d.running}</div><div class="l">运行中</div></div>
-      <div class="stat"><div class="n" style="color:var(--faint)">${d.stopped}</div><div class="l">已停止</div></div>
-    </div><div class="list">${rows}</div>`, "span2");
-}
-
-let overviewSecData = null, overviewSecLoadedAt = 0, overviewSecLoading = false;
-
-const overviewSecurityShell = () => `
-  <section id="overviewSecurity" class="overview-security">
-    <div class="overview-security-head">
-      <div>
-        <div class="eyebrow"><span class="dot info"></span>安全态势</div>
-        <h2 id="overviewSecurityTitle">正在核查防护状态</h2>
-        <p id="overviewSecurityNote">汇总 CrowdSec、节点防护与公网资产</p>
-      </div>
-      <button class="btn ghost" data-open-security>进入安全中心</button>
-    </div>
-    <div class="overview-security-body">
-      <div>
-        <div class="security-kpis" id="overviewSecurityKpis"></div>
-        <div class="overview-attack-list" id="overviewAttackList"></div>
-      </div>
-      <div class="overview-map-wrap">
-        <div class="overview-map" id="overviewMiniMap"></div>
-        <div class="overview-map-caption">24 小时攻击来源概览 · 详细地图可在安全中心查看</div>
-      </div>
-    </div>
-  </section>
-  <div id="overviewCards" class="overview-cards"></div>`;
-
-function ensureOverviewShell() {
-  if ($("overviewCards")) return;
-  destroyOverviewMiniMap();
-  $("overview").innerHTML = overviewSecurityShell();
-}
-
-function overviewPlaceRows(incidents) {
-  const grouped = {};
-  for (const item of incidents || []) {
-    const label = item.location_name || (item.country ? cname(item.country) : "未知地区");
-    const slot = grouped[label] || (grouped[label] = {label, sources:0, events:0, blocked:0});
-    slot.sources++;
-    slot.events += Math.max(1, Number(item.event_count || item.count || 1));
-    if (item.blocked) slot.blocked++;
-  }
-  return Object.values(grouped).sort((a,b) => b.events - a.events).slice(0,4);
-}
-
-function renderOverviewSecurity(crowdsec, security) {
-  ensureOverviewShell();
-  const cs = crowdsec?.data || {}, cc = security?.coverage?.counts || {};
-  const incidents = security?.incidents?.items || [];
-  const crit = Number(cc.crit || 0), warn = Number(cc.warn || 0);
-  const title = crit ? `发现 ${crit} 个严重保护缺口`
-    : warn ? `有 ${warn} 项防护需要确认`
-    : security ? "当前防护链路运行正常" : "正在核查完整防护状态";
-  const titleEl = $("overviewSecurityTitle");
-  titleEl.textContent = title;
-  titleEl.className = crit ? "crit" : warn ? "warn" : "";
-  $("overviewSecurityNote").textContent = security
-    ? `节点在线 ${cc.nodes_online ?? 0}/${cc.nodes_total ?? 0} · 检出、决策、下发与落地统一核查`
-    : "基础态势已加载，保护覆盖正在核查";
-  $("overviewSecurityKpis").innerHTML = `
-    <div class="security-kpi"><b>${cs.active_bans ?? 0}</b><span>当前封禁</span></div>
-    <div class="security-kpi"><b class="${cs.alerts_24h ? "warn" : ""}">${cs.alerts_24h ?? 0}</b><span>24h 攻击</span></div>
-    <div class="security-kpi"><b class="${crit ? "crit" : warn ? "warn" : ""}">${crit + warn}</b><span>保护缺口</span></div>
-    <div class="security-kpi"><b>${cc.nodes_online ?? "—"}<i>/${cc.nodes_total ?? "—"}</i></b><span>在线节点</span></div>`;
-
-  const places = overviewPlaceRows(incidents);
-  $("overviewAttackList").innerHTML = places.length
-    ? `<div class="overview-list-title">攻击较集中的位置</div>${places.map((x,i) => `
-      <div class="overview-attack-row">
-        <span><i>${i+1}</i>${esc(x.label)}</span>
-        <em>${x.sources} 源${x.blocked ? ` · ${x.blocked} 封` : ""}</em>
-        <b>${x.events} 事件</b>
-      </div>`).join("")}`
-    : `<div class="overview-calm">${security ? "24 小时内暂无可定位攻击" : "攻击位置正在汇总"}</div>`;
-  if (security) renderOverviewMiniMap(incidents);
-}
-
-async function loadOverviewSecurity(force=false) {
-  if (overviewSecLoading || activeTab !== "overview" || activeNode) return;
-  if (!force && overviewSecData && Date.now() - overviewSecLoadedAt < 20000) return;
-  overviewSecLoading = true;
-  try {
-    const res = await fetch("/api/security/overview?hours=24&limit=120", {cache:"no-store"});
-    const d = await res.json();
-    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
-    overviewSecData = d; overviewSecLoadedAt = Date.now();
-    if (activeTab === "overview" && !activeNode)
-      renderOverviewSecurity(lastSections?.crowdsec, overviewSecData);
-  } catch { /* 总览已有 CrowdSec 基础态势，完整核查失败不阻断首页 */ }
-  finally { overviewSecLoading = false; }
-}
-
-/* 总览整块重绘。抽出来是为了让"展开某个节点"这类纯本地状态变化
-   能直接重画，不用重新发一轮请求 */
-function renderOverview(s) {
-  ensureOverviewShell();
-  const growth = window._growthCache;
-  renderOverviewSecurity(s.crowdsec, overviewSecData);
-  $("overviewCards").innerHTML = [
-    renderNodesCard(s.nodes),
-    renderStorage(s.storage, growth),
-    renderHost(s.host, sparkCache),
-    renderNetwork(s.network, sparkCache),
-    renderServices(s.services),
-    renderPortsCard(s.ports),
-    renderConnCard(s.connections),
-    renderEngineCard(s.engine),
-    renderDisksCard(s.disks),
-    renderCerts(s.certs),
-    renderRemote(s.remote),
-    renderContainersCard(s.containers),
-  ].join("");
-  loadOverviewSecurity();
-}
-
-/* 被管理节点。每台一个带进度条的小格子，宽屏并排、手机单列。
-   一开始做的是每台一行文字，横向对比是快，但"这台到底忙不忙"要读数字才知道；
-   进度条能扫一眼看出来，多几台也不累。点格子展开细节。 */
-let nodeOpen = null;
-
-function nodeMetric(label, pct, extra) {
-  const v = pct == null ? "—" : pct + "%";
-  return `<div class="nm">
-    <div class="nmk"><span>${label}</span><b>${v}</b></div>
-    <div class="bar"><i class="${pctClass(pct || 0)}" style="width:${Math.min(100, pct || 0)}%"></i></div>
-    ${extra ? `<div class="nmx">${extra}</div>` : ""}
-  </div>`;
-}
-
-/* 每台节点一张卡片，和存储、网络那些一起在 grid 里流动。
-   本来做成了一张全宽卡片装下所有节点，但 grid 默认不回填空隙：前面的
-   安全态势只占一列，后面跟一个要占整行的卡片，grid 只能换行，
-   安全态势右边就空出一整排。拆成独立卡片顺带也解决了全宽把进度条
-   拉得老长的问题。 */
-function renderNodesCard(sec) {
-  const d = sec?.data;
-  if (!d?.items?.length) return "";
-  return d.items.map(n => {
-    const title = `${machineTag(n.name)}<span class="right">${
-      n.ok ? esc(n.hostname || "") + " · " + n.latency_ms + "ms" : "离线"}</span>`;
-    if (!n.ok) {
-      return card(title, "crit",
-        `<div class="empty center">${esc(n.error || "连不上")}</div>`, "flat");
-    }
-    const m = n.memory || {}, c = n.containers || {}, cs = n.crowdsec || {};
-    const worst = (n.disks || [])[0];          // 已按使用率降序，第一个最满
-    // 三个百分比里最高的那个决定灯色。分开看容易漏——内存 90% 和磁盘 90%
-    // 都是问题，但只盯负载就都看不见
-    const peak = Math.max(n.load_percent || 0, m.percent || 0, worst?.percent || 0);
-    const down = [
-      cs.agent && cs.agent !== "active" ? "agent 停了" : null,
-      cs.bouncer && cs.bouncer !== "active" ? "bouncer 停了" : null,
-    ].filter(Boolean);
-    return card(title, peak > 90 ? "crit" : peak > 75 ? "warn" : "ok", `
-      ${down.length ? `<div class="nodealert">${down.map(esc).join(" · ")}</div>` : ""}
-      <div class="nodemetrics">
-        ${nodeMetric("负载", n.load_percent, `${n.cores} 核 · ${
-          (n.load || []).map(x => x.toFixed(2)).join(" ")}`)}
-        ${nodeMetric("内存", m.percent, `${fmtBytes(m.used)} / ${fmtBytes(m.total)}`)}
-        ${worst ? nodeMetric(esc(worst.mount), worst.percent,
-          `${fmtBytes(worst.available)} 可用${
-            n.disks.length > 1 ? ` · 另 ${n.disks.length - 1} 个卷` : ""}`) : ""}
-      </div>
-      <div class="nodefoot">
-        <span>容器 <b>${c.running}</b>/${c.total}</span>
-        <span>端口 <b>${n.ports?.exposed ?? "—"}</b></span>
-        ${cs.ipset_entries != null
-          ? `<span>规则 <b>${cs.ipset_entries.toLocaleString()}</b></span>` : ""}
-        ${cs.blocked_packets != null
-          ? `<span>命中 <b>${cs.blocked_packets.toLocaleString()}</b></span>` : ""}
-        ${n.temp_c != null ? `<span>${n.temp_c}°C</span>` : ""}
-        <span class="dim">${fmtDur(n.uptime_seconds)}</span>
-      </div>
-      ${nodeOpen === n.name ? nodeDetail(n) : ""}
-      <div class="nodemore nodeRow" data-node="${esc(n.name)}">${
-        nodeOpen === n.name ? "收起" : "磁盘 · 端口 · 服务明细"}</div>
-    `, "flat nodeCard");
-  }).join("");
-}
-
-function nodeDetail(n) {
-  const disks = (n.disks || []).map(x => `
-    <div style="padding:4px 0">
-      <div class="row" style="border:none; padding:0 0 3px">
-        <span class="k"><span class="mono" style="font-size:12px">${esc(x.mount)}</span>
-          <span class="tag">${esc(x.fs)}</span></span>
-        <span class="v">${fmtBytes(x.used)}<span class="unit">/ ${fmtBytes(x.total)}</span></span>
-      </div>
-      <div class="bar"><i class="${pctClass(x.percent)}" style="width:${x.percent}%"></i></div>
-    </div>`).join("");
-  const ports = (n.ports?.items || []).slice(0, 14).map(p =>
-    `<span class="tag" title="${esc(p.proc || "")}">${p.port}${
-      p.proc ? " " + esc(p.proc) : ""}</span>`).join(" ");
-  const svc = Object.entries(n.services || {}).map(([k, v]) =>
-    `<span class="tag ${v === "active" ? "" : "crit"}">${esc(k)}</span>`).join(" ");
-  return `<div class="nodedetail">
-    <div class="nmx" style="margin-bottom:8px">
-      ${esc(n.os || "")}
-      ${Math.abs(n.clock_skew_seconds || 0) > 60
-        ? ` · <span style="color:var(--warn)">时钟偏差 ${n.clock_skew_seconds}s</span>` : ""}
-    </div>
-    ${n.disks.length > 1 ? disks : ""}
-    ${ports ? `<div style="margin-top:8px"><div class="nmx" style="margin-bottom:5px">
-      对外监听 ${n.ports.exposed} 个端口（回环 ${n.ports.loopback} 个不计）</div>
-      <div class="tagwrap">${ports}</div></div>` : ""}
-    ${svc ? `<div style="margin-top:8px"><div class="nmx" style="margin-bottom:5px">服务</div>
-      <div class="tagwrap">${svc}</div></div>` : ""}
-  </div>`;
-}
-
-/* ---------- 节点视图 ----------
-   数据来自 nodes 采集器，粒度比本机粗：没有网络速率、连接、证书、SMART。
-   缺的部分明确说出来，不拿本机数据顶替——那会让人误判。 */
-
-function nodeCard(n, title, dot, body) {
-  return card(`${esc(title)} <span class="right">${machineTag(n.name)}</span>`,
-    dot, body, "flat");
-}
-
-function renderNodeOverview(n) {
-  destroyOverviewMiniMap();
-  if (!n.ok) {
-    $("overview").innerHTML = card(
-      `${esc(n.name)} <span class="right">离线</span>`, "crit",
-      `<div class="empty center" style="padding:34px 20px">
-        ${esc(n.error || "连不上这台机器")}<br>
-        <span style="font-size:12px; color:var(--faint)">
-          面板每 60 秒重试一次。检查节点的 sshd、网络，
-          以及 authorized_keys 里的那把受限密钥还在不在</span>
-      </div>`, "full flat");
-    return;
-  }
-  const m = n.memory || {}, c = n.containers || {}, cs = n.crowdsec || {};
-  const cards = [];
-
-  cards.push(nodeCard(n, "主机", n.load_percent > 85 ? "warn" : "ok", `
-    <div class="big sm">${n.load_percent ?? "—"}<span class="unit">% 负载</span></div>
-    <div class="sub">${n.cores} 核 · 负载 ${(n.load || []).map(x => x.toFixed(2)).join(" / ")}</div>
-    <div class="nodemetrics" style="margin-top:14px">
-      ${nodeMetric("内存", m.percent, `${fmtBytes(m.used)} / ${fmtBytes(m.total)}`)}
-      ${n.swap ? nodeMetric("交换", n.swap.percent,
-        `${fmtBytes(n.swap.used)} / ${fmtBytes(n.swap.total)}`) : ""}
-    </div>
-    <div class="nodefoot">
-      <span>${esc(n.hostname || "")}</span>
-      ${n.temp_c != null ? `<span>${n.temp_c}°C</span>` : ""}
-      <span class="dim">运行 ${fmtDur(n.uptime_seconds)}</span>
-    </div>`));
-
-  cards.push(nodeCard(n, "存储", (n.disks || [])[0]?.percent > 85 ? "warn" : "ok",
-    `<div class="nodemetrics">${(n.disks || []).map(x => nodeMetric(
-      esc(x.mount), x.percent,
-      `${esc(x.fs)} · ${fmtBytes(x.available)} 可用 / ${fmtBytes(x.total)}`)).join("")}
-     </div>` || '<div class="empty">无数据</div>'));
-
-  cards.push(nodeCard(n, "容器", c.stopped > 0 ? "" : "ok", `
-    <div class="stats">
-      <div class="stat"><div class="n">${c.running ?? 0}</div><div class="l">运行中</div></div>
-      <div class="stat"><div class="n" style="color:var(--faint)">${c.stopped ?? 0}</div>
-        <div class="l">已停止</div></div>
-    </div>
-    <div class="list">${(c.items || []).slice(0, 10).map(x => `
-      <div class="row"><span class="k"><span class="dot ok"></span>
-        <span style="color:var(--text)">${esc(x.name)}</span></span>
-        <span class="v dim" style="font-size:11.5px">${esc(x.status)}</span></div>`).join("")
-      || '<div class="empty">无运行中的容器</div>'}</div>
-    ${c.total > 10 ? `<div class="note">另有 ${c.total - 10} 个未列出</div>` : ""}`));
-
-  cards.push(nodeCard(n, "端口暴露", n.ports?.exposed > 20 ? "warn" : "ok", `
-    <div class="stats">
-      <div class="stat"><div class="n">${n.ports?.exposed ?? "—"}</div><div class="l">对外监听</div></div>
-      <div class="stat"><div class="n" style="color:var(--faint)">${n.ports?.loopback ?? "—"}</div>
-        <div class="l">仅本机</div></div>
-    </div>
-    <div class="tagwrap">${(n.ports?.items || []).slice(0, 18).map(p =>
-      `<span class="tag" title="${esc(p.proc || "")}">${p.port}</span>`).join("")}</div>
-    <div class="note">这里只区分"对外监听"和"回环"。要判断某个端口是真的公网
-      可达还是只在内网，得看这台机器前面的防火墙</div>`));
-
-  if (cs.ipset_entries != null) {
-    const bad = cs.agent !== "active" || cs.bouncer !== "active";
-    cards.push(nodeCard(n, "本机防护", bad ? "crit" : "ok", `
-      <div class="big sm">${cs.ipset_entries.toLocaleString()}<span class="unit">条已落地</span></div>
-      <div class="sub">iptables/ipset 里实际生效的封禁数</div>
-      <div style="margin-top:12px">
-        <div class="row"><span class="k"><span>检测 agent</span></span>
-          <span class="v"><span class="tag ${cs.agent === "active" ? "ok" : "crit"}">${
-            esc(cs.agent || "未知")}</span></span></div>
-        <div class="row"><span class="k"><span>拦截 bouncer</span></span>
-          <span class="v"><span class="tag ${cs.bouncer === "active" ? "ok" : "crit"}">${
-            esc(cs.bouncer || "未知")}</span></span></div>
-        ${cs.blocked_packets != null ? `<div class="row"><span class="k"><span>实际命中</span></span>
-          <span class="v">${cs.blocked_packets.toLocaleString()} 包 · ${fmtBytes(cs.blocked_bytes)}</span></div>` : ""}
-      </div>
-      <div class="note">这台机器上真实落地的规则数。决策由中央 LAPI 下发，
-        所以各节点的数字应该一致——差得多说明某台的 bouncer 没跟上</div>`));
-  }
-
-  const svc = Object.entries(n.services || {});
-  if (svc.length) {
-    cards.push(nodeCard(n, "服务", svc.some(([, v]) => v !== "active") ? "warn" : "ok",
-      `<div class="list">${svc.map(([k, v]) => `
-        <div class="row"><span class="k">
-          <span class="dot ${v === "active" ? "ok" : "crit"}"></span>
-          <span style="color:var(--text)">${esc(k)}</span></span>
-          <span class="v dim" style="font-size:11.5px">${esc(v)}</span></div>`).join("")}</div>
-       <div class="note">采集脚本固定检查这几个 systemd 单元。
-         名单写死在节点侧——让面板指定查什么，就等于把任意命令执行的能力还回去一部分</div>`));
-  }
-
-  cards.push(card(`未采集的项 <span class="right">${machineTag(n.name)}</span>`, "", `
-    <div class="note" style="margin:0; line-height:1.8">
-      <b>网络速率</b>、<b>活跃连接</b>、<b>证书到期</b>、<b>硬盘 SMART</b>
-      这几项节点上没采。它们要么需要持续采样（速率得算两次差值），
-      要么要额外的权限或工具（smartctl 需要 root 直接读设备）。<br>
-      采集脚本在 <code>scripts/node-collect.sh</code>，往里加几行 +
-      面板加个解析就能补上，按你实际想看什么逐个加。
-    </div>`, "flat"));
-
-  $("overview").innerHTML = cards.join("");
-}
-
-function renderNodePorts(n) {
-  if (!n.ok) { $("ports").innerHTML = ""; renderNodeOverview(n); return; }
-  const items = n.ports?.items || [];
-  $("portStat").innerHTML = `<h2><span class="dot ${
-    items.length > 20 ? "warn" : "ok"}"></span>端口概况
-    <span class="right">${machineTag(n.name)}</span></h2>
-    <div class="big">${n.ports.exposed}<span class="unit">对外监听</span></div>
-    <div class="sub">另有 ${n.ports.loopback} 个只绑回环</div>
-    <div class="note">节点侧采的是 <code>ss -lntupH</code>，只分"对外"和"回环"两档。
-      本机视图里那种"公网/内网/仅本机"三级分类要读防火墙规则才能判断，
-      节点上没做</div>`;
-  $("portPublic").innerHTML = `<h2><span class="dot info"></span>监听中的端口</h2>
-    <div class="tagwrap">${items.map(p =>
-      `<span class="tag" title="${esc(p.addr)} ${esc(p.proto)}">${p.port}${
-        p.proc ? " " + esc(p.proc) : ""}</span>`).join("") || "无"}</div>`;
-  const q = ($("portSearch")?.value || "").trim().toLowerCase();
-  const rows = items.filter(p => !q ||
-    String(p.port).includes(q) || (p.proc || "").toLowerCase().includes(q));
-  $("portList").innerHTML = rows.length ? `<table class="tbl">
-    <thead><tr><th>端口</th><th>协议</th><th>进程</th><th class="opt">监听地址</th></tr></thead>
-    <tbody>${rows.map(p => `<tr>
-      <td class="ipcell">${p.port}</td>
-      <td><span class="tag">${esc(p.proto)}</span></td>
-      <td>${esc(p.proc || "—")}</td>
-      <td class="why opt mono">${esc(p.addr)}</td>
-    </tr>`).join("")}</tbody></table>`
-    : '<div class="empty">没有匹配的端口</div>';
-}
-
-function renderNodeContainers(n) {
-  if (!n.ok) { renderNodeOverview(n); return; }
-  const c = n.containers || {};
-  $("ctrNote").textContent = `${c.running}/${c.total} 运行中 · 只读`;
-  $("ctrList").innerHTML = `
-    <div class="callout" style="margin-bottom:12px">
-      <b>节点视图下容器是只读的。</b>面板连节点用的是受限密钥，它只能执行采集脚本，
-      不能启停容器——这正是那把钥匙的价值所在：即使泄漏，拿到的也只是读监控数据的能力。
-      要支持远程操作，需要另发一把绑定操作脚本的密钥，那是独立的一块工作。
-    </div>
-    ${(c.items || []).length ? `<table class="tbl">
-      <thead><tr><th>容器</th><th>状态</th><th class="opt">镜像</th></tr></thead>
-      <tbody>${c.items.map(x => `<tr>
-        <td><span class="dot ok"></span> ${esc(x.name)}</td>
-        <td class="why">${esc(x.status)}</td>
-        <td class="why opt">${esc(x.image)}</td>
-      </tr>`).join("")}</tbody></table>`
-      : '<div class="empty">无运行中的容器</div>'}
-    ${c.stopped ? `<div class="note">另有 ${c.stopped} 个已停止的容器未列出——
-      多数是历史遗留（回滚备份之类），列出来会把在跑的淹掉</div>` : ""}`;
-  $("snapList").innerHTML = `<div class="empty center">
-    快照功能只对本机可用</div>`;
-}
-
-function renderNodeConns(n) {
-  $("connStat").innerHTML = `<h2><span class="dot"></span>活跃连接
-    <span class="right">${machineTag(n.name)}</span></h2>
-    <div class="empty center" style="padding:26px 12px; line-height:1.7">
-      节点上没采连接数据。<br>
-      <span style="font-size:12px; color:var(--faint)">
-        往 node-collect.sh 里加一段 <code>ss -tnH</code> 就能补上，
-        GeoIP 归属在面板侧查</span>
-    </div>`;
-  $("connPorts").innerHTML = "";
-  $("connList").innerHTML = "";
-  $("connNote").textContent = "";
-}
-
-function renderRemote(sec) {
-  const d = sec?.data;
-  if (!d?.items?.length) return "";
-  return d.items.map(h => {
-    if (!h.ok) return card(esc(h.name), "crit",
-      `<div class="empty center">${esc(h.error || "离线")}</div>`);
-    const m = h.memory || {}, n = h.npu;
-    let npuHtml = "";
-    if (n) {
-      const memPct = n.mem_total_mb ? (n.mem_used_mb / n.mem_total_mb * 100) : 0;
-      npuHtml = `
-        <div class="row"><span class="k"><span>NPU 算力</span></span>
-          <span class="v">${n.aicore_percent != null ? n.aicore_percent + " %" : "—"}</span></div>
-        <div class="row"><span class="k"><span>NPU 显存</span></span>
-          <span class="v">${n.mem_used_mb ?? "—"} / ${n.mem_total_mb ?? "—"} MB</span></div>
-        <div class="bar"><i class="${pctClass(memPct)}" style="width:${memPct}%"></i></div>
-        ${n.temp_c != null ? `<div class="row"><span class="k"><span>温度</span></span>
-          <span class="v">${n.temp_c} °C</span></div>` : ""}
-        ${n.health_is_false_alarm
-          ? `<div class="note">npu-smi 报 Alarm 属板级传感器缺失的固有现象，算力实测正常</div>` : ""}`;
-    }
-    return card(esc(h.name), "ok", `
-      <div class="big sm">${h.load ? h.load[0].toFixed(2) : "—"}<span class="unit">负载</span></div>
-      <div class="sub">运行 ${fmtDur(h.uptime_seconds)}</div>
-      <div style="margin-top:11px">
-        <div class="row" style="border:none; padding:0 0 3px"><span class="k"><span>内存</span></span>
-          <span class="v">${fmtBytes(m.used)} <span class="unit">/ ${fmtBytes(m.total)}</span></span></div>
-        <div class="bar"><i class="${pctClass(m.percent)}" style="width:${m.percent||0}%"></i></div>
-      </div>${npuHtml}`);
-  }).join("");
-}
-
-/* ================= 告警条 ================= */
-
-let alertsExpanded = false;
-
-function renderAlertBar(alerts) {
-  // 被忽略的不占地方，pending 的还没坐实也不显示
-  const items = (alerts?.active || []).filter(a => !a.pending && !a.muted);
-  if (!items.length) { $("alertbar").innerHTML = ""; return; }
-
-  const line = a => `
-    <div class="alertline ${a.level === "crit" ? "crit" : ""}">
-      <span class="dot ${a.level}"></span>
-      <span class="t">${esc(a.title)}</span>
-      <span class="d">${esc(a.detail || "")}</span>
-      <span class="when">持续 ${fmtShort(a.duration)}${a.notified ? " · 已推送" : ""}</span>
-      <button class="btn sm ghost" data-mute="${esc(a.key)}"
-        title="不再显示也不再推送，可在设置页恢复">忽略</button>
-    </div>`;
-
-  // 三条以上默认折叠。硬盘服役年限这种告警会长期挂着，
-  // 全摊开会把首屏顶掉一大块
-  if (items.length > 2 && !alertsExpanded) {
-    const crit = items.filter(a => a.level === "crit").length;
-    $("alertbar").innerHTML = line(items[0]) + `
-      <div class="alertline" style="cursor:pointer" id="alertMore">
-        <span class="dot ${crit ? "crit" : "warn"}"></span>
-        <span class="t">还有 ${items.length - 1} 条告警</span>
-        <span class="d">${esc(items.slice(1, 4).map(a => a.title).join("、"))}</span>
-        <span class="when">点击展开</span>
-      </div>`;
-    $("alertMore").onclick = () => { alertsExpanded = true; renderAlertBar(alerts); };
-    return;
-  }
-  $("alertbar").innerHTML = items.map(line).join("") +
-    (items.length > 2 ? `<div class="alertline" style="cursor:pointer" id="alertLess">
-      <span class="t" style="color:var(--dim)">收起</span></div>` : "");
-  const less = $("alertLess");
-  if (less) less.onclick = () => { alertsExpanded = false; renderAlertBar(alerts); };
-}
-
-/* ================= 防火墙 ================= */
-
-const KIND_LABEL = {manual:"手动", community:"社区", detected:"自动"};
-const KIND_TAG = {manual:"accent", community:"", detected:"warn"};
-let fwFilter = "all", fwQuery = "", fwMeta = null, fwConfirm = null;
-let fwSearchResult = null, fwSearchTimer = null;
-
-/* agent 心跳 30 秒一次、bouncer 默认 10 秒拉一次，所以两分钟没动静就是不对劲了。
-   分三档而不是"在线/离线"：刚超时和断了一小时，处理的紧迫程度不一样 */
-function liveState(sec) {
-  if (sec == null) return {cls: "", txt: "未知"};
-  if (sec < 120) return {cls: "ok", txt: fmtShort(sec) + "前"};
-  if (sec < 900) return {cls: "warn", txt: fmtShort(sec) + "前"};
-  return {cls: "crit", txt: fmtShort(sec) + "前"};
-}
-
-function renderFwNodes(d) {
-  const nodes = d.nodes || [];
-  const alertsBy = {};
-  (d.by_machine || []).forEach(x => { alertsBy[x.machine] = x; });
-  if (!nodes.length) {
-    $("fwNodes").innerHTML = `<h2><span class="dot"></span>防护节点</h2>
-      <div class="empty center">${esc(d.nodes_error || "读不到节点清单")}</div>`;
-    return;
-  }
-  /* agent 和 bouncer 分开显示，不合并成一个"在线"状态：
-     agent 停了是不再检测（已有封禁仍然拦），bouncer 停了是新决策落不了地，
-     两种故障的后果完全不同，合并成一个灯就分不出该先修哪个 */
-  const body = nodes.map(n => {
-    const a = liveState(n.heartbeat_seconds);
-    const b = n.bouncers.length
-      ? liveState(Math.min(...n.bouncers.map(x => x.pull_seconds ?? 1e9)))
-      : {cls: "crit", txt: "未接入"};
-    const hit = alertsBy[n.name];
-    return `<div class="row nodeLine">
-      <span class="k">
-        ${machineTag(n.name)}
-        ${n.ip ? `<span class="mono" style="font-size:12px">${esc(n.ip)}</span>` : ""}
-        ${n.os ? `<span class="tag">${esc(n.os)}</span>` : ""}
-        ${!n.validated ? '<span class="tag crit">未批准</span>' : ""}
-        ${hit ? `<span class="tag warn">告警 ${hit.count}${
-          hit.recent ? ` · 24h ${hit.recent}` : ""}</span>` : ""}
-      </span>
-      <span class="v" style="font-size:12px">
-        <span><span class="dot ${a.cls}"></span>检测 ${a.txt}</span>
-        <span style="margin-left:10px"><span class="dot ${b.cls}"></span>拦截 ${b.txt}</span>
-      </span>
-    </div>`;
-  }).join("");
-  const orphans = d.orphan_bouncers || [];
-  $("fwNodes").innerHTML = `<h2><span class="dot ${
-    nodes.some(n => (n.heartbeat_seconds ?? 1e9) > 900) ? "warn" : "ok"}"></span>防护节点
-    <span class="right">${nodes.length} 台接入同一套决策</span></h2>
-    <div class="list">${body}</div>
-    <div class="note">检测=本机 agent 上报心跳，拦截=本机 bouncer 拉取决策。
-      在任意一台上的封禁操作对全部节点生效${
-      orphans.length ? `。另有 ${orphans.length} 个未关联到机器的接入方（${
-        orphans.map(o => esc(o.name)).join("、")}）` : ""}</div>`;
-}
-
-function renderFwStat(d) {
-  const c = d.ban_counts || {};
-  $("fwStat").innerHTML = `<h2><span class="dot ${d.active_bans?"warn":"ok"}"></span>封禁概况</h2>
-    <div class="big">${(d.active_bans ?? 0).toLocaleString()}<span class="unit">条生效中</span></div>
-    <div class="sub">数据源 ${esc(d.decisions_source || "—")}${
-      d.truncated ? ` · 列表载入 ${d.listed}` : ""}</div>
-    <div style="margin-top:14px">
-      <div class="row"><span class="k"><span>手动封禁</span></span><span class="v">${c.manual ?? 0}</span></div>
-      <div class="row"><span class="k"><span>本地检出</span></span><span class="v">${c.detected ?? 0}</span></div>
-      <div class="row"><span class="k"><span>社区黑名单</span></span><span class="v">${c.community ?? 0}</span></div>
-      <div class="row"><span class="k"><span>24h 告警</span></span><span class="v">${d.alerts_24h ?? 0}</span></div>
-    </div>
-    ${(d.nodes || []).length > 1
-      ? `<div class="note">这些封禁下发到全部 ${d.nodes.length} 个节点，不区分是哪台检出的</div>`
-      : ""}`;
-}
-
-function renderFwTop(d) {
-  const top = d.top_sources || [];
-  const banned = new Set((d.decisions || []).map(x => x.ip));
-  const body = top.length ? top.map(s => {
-    const isBanned = banned.has(s.ip);
-    return `<div class="row">
-      <span class="k">
-        <span class="mono" style="color:var(--text)">${esc(s.ip)}</span>
-        <span class="tag">${s.count} 次</span>
-        ${(s.machines || []).map(m => machineTag(m)).join("")}
-        ${(s.machines || []).length > 1
-          ? '<span class="tag warn" title="同一个 IP 打了多台，说明它在扫全网，不是冲某一台来的">扫全网</span>'
-          : ""}
-        ${s.country ? `<span class="tag accent">${esc(cname(s.country))}</span>` : ""}
-        ${s.as_name ? `<span style="font-size:12px">${esc(s.as_name)}</span>` : ""}
-      </span>
-      <span class="v">${isBanned
-        ? '<span class="tag crit">已封禁</span>'
-        : `<button class="btn sm ghost" data-ban="${esc(s.ip)}">封禁</button>`}</span>
-    </div>`;
-  }).join("") : `<div class="empty center">暂无攻击记录</div>`;
-  $("fwTop").innerHTML = `<h2><span class="dot ${top.length?"warn":"ok"}"></span>攻击来源 TOP</h2>
-    <div class="list">${body}</div>`;
-}
-
-function renderFwList(d) {
-  // 搜索有结果时用后端返回的，否则用采集器下发的那批
-  const source = fwSearchResult !== null ? fwSearchResult : (d.decisions || []);
-  const rows = source.filter(x => fwFilter === "all" || x.kind === fwFilter);
-  if (!rows.length) {
-    $("fwList").innerHTML = `<div class="empty">${
-      fwSearchResult !== null ? "库里没有匹配的封禁记录"
-        : source.length ? "当前筛选下没有记录" : "当前无封禁"}</div>`;
-    return;
-  }
-  const body = rows.slice(0, 400).map(x => {
-    const kind = x.kind || "detected";
-    const where = [x.country ? cname(x.country) : null, x.as_label || x.as_name]
-      .filter(Boolean).join(" · ");
-    const canUnban = kind !== "community";
-    const pending = fwConfirm === x.ip;
-    return `<tr>
-      <td class="ipcell">${esc(x.ip)}${x.scope === "Range" ? ' <span class="tag">网段</span>' : ""}${
-        x.machine ? " " + machineTag(x.machine) : ""}</td>
-      <td><span class="tag ${KIND_TAG[kind]}">${KIND_LABEL[kind] || kind}</span></td>
-      <td class="why opt" title="${esc(x.reason || "")}">${
-        esc(x.reason_cn || (x.reason || "—").replace(/^.*\//, ""))}</td>
-      <td class="why opt">${esc(where || "—")}</td>
-      <td style="color:var(--dim); white-space:nowrap">${fmtLeft(x.expires_in)}</td>
-      <td class="act">${canUnban
-        ? `<button class="btn sm ${pending ? "confirm" : "ghost"}" data-unban="${esc(x.ip)}">${
-            pending ? "确认解封" : "解封"}</button>`
-        : `<span class="tag" title="社区黑名单由 CrowdSec 中心同步，解了会被同步回来">不可解</span>`}</td>
-    </tr>`;
-  }).join("");
-  const nodeHint = activeNode
-    ? `当前在 ${esc(activeNode)} 视图下，但<b>封禁列表不按机器过滤</b>——
-       决策由中央 LAPI 统一下发，每一条对所有节点都生效。
-       上面的攻击来源和国家分布才是这台机器检出的。<br>`
-    : "";
-  const hint = nodeHint + (fwSearchResult !== null
-    ? `搜索命中 ${rows.length} 条（直接查库，覆盖全部 ${d.active_bans} 条封禁）`
-    : d.truncated
-      ? `手动与自动检出的已全部列出；社区黑名单共 ${d.ban_counts?.community ?? 0} 条，
-         此处只载入最近 ${(d.listed ?? 0) - (d.ban_counts?.manual ?? 0) - (d.ban_counts?.detected ?? 0)} 条。
-         要找具体 IP 请用上方搜索框，它直接查库`
-      : "");
-  $("fwList").innerHTML = `<table class="tbl">
-    <thead><tr><th>IP</th><th>来源</th><th class="opt">场景</th><th class="opt">归属</th><th>剩余</th><th></th></tr></thead>
-    <tbody>${body}</tbody></table>
-    ${hint ? `<div class="note">${hint}</div>` : ""}`;
-}
-
-function renderFwGeo(d) {
-  const rows = d.by_country || [];
-  const total = rows.reduce((s, x) => s + x.count, 0) || 1;
-  $("fwGeo").innerHTML = `<h2><span class="dot info"></span>攻击来源国家
-    <span class="right">近 ${(d.alerts || []).length} 条告警</span></h2>
-    ${rows.length ? `<div class="list">${rows.map(x => {
-      const pct = x.count / total * 100;
-      return `<div style="padding:6px 0">
-        <div class="row" style="border:none; padding:0 0 4px">
-          <span class="k"><span style="color:var(--text)">${esc(cname(x.code))}</span>
-            <span class="tag">${x.ips} 个 IP</span></span>
-          <span class="v">${x.count} 次<span class="unit">${pct.toFixed(0)}%</span></span>
-        </div>
-        <div class="bar"><i style="width:${pct}%; background:var(--accent)"></i></div>
-      </div>`;
-    }).join("")}</div>
-    <div class="note">按告警条数统计。同一个 IP 反复攻击会累加，所以另附独立 IP 数</div>`
-    : `<div class="empty center">暂无来源数据</div>`}`;
-}
-
-function renderFwAsn(d) {
-  const rows = d.by_asn || [];
-  $("fwAsn").innerHTML = `<h2><span class="dot info"></span>来源网络运营商</h2>
-    ${rows.length ? `<div class="list">${rows.map(x => `
-      <div class="row">
-        <span class="k"><span title="${esc(x.as_name || "")}">${esc(x.as_label || x.as_name)}</span>
-          ${x.country ? `<span class="tag">${esc(cname(x.country))}</span>` : ""}</span>
-        <span class="v">${x.count}</span>
-      </div>`).join("")}</div>
-    <div class="note">大量攻击集中在同一家 IDC 时，可以考虑整段封禁</div>`
-    : `<div class="empty center">暂无 ASN 数据</div>`}`;
-}
-
-function renderFwSources(sec) {
-  const d = sec?.data;
-  if (!d?.ok) {
-    $("fwSources").innerHTML = `<h2><span class="dot crit"></span>防护引擎</h2>
-      <div class="empty center">${esc(sec?.error || d?.error || "读不到 metrics")}</div>`;
-    return;
-  }
-  const wasted = d.wasted_sources || [];
-  const rows = (d.sources || []).map(s => {
-    const rate = s.parse_rate;
-    const cls = rate === null ? "" : rate >= 50 ? "ok" : rate > 0 ? "warn" : "crit";
-    return `<div class="row">
-      <span class="k">
-        <span style="color:var(--text)">${esc(s.name)}</span>
-        <span class="tag">${esc(s.kind)}</span>
-        ${s.wasted ? '<span class="tag crit">白读</span>' : ""}
-      </span>
-      <span class="v">${s.lines.toLocaleString()} 行
-        <span class="tag ${cls}">${rate === null ? "—" : rate + "%"}</span></span>
-    </div>`;
-  }).join("");
-  return $("fwSources").innerHTML = `
-    <h2><span class="dot ${wasted.length ? "warn" : "ok"}"></span>防护引擎 · 日志源
-      <span class="right">本机 · 有效 ${d.effective_sources}/${(d.sources||[]).length} 个</span></h2>
-    <div class="list">${rows || '<div class="empty">无日志源</div>'}</div>
-    ${wasted.length ? `<div class="note"><b style="color:var(--warn)">${wasted.length} 个源白读</b>：
-      ${wasted.map(esc).join("、")}——配了采集但解析率 0%，说明缺对应的
-      parser/collection，这些源上的攻击检测实际没生效。装上对应 collection 或从
-      acquis.yaml 里移除，省 CPU。</div>` : ""}
-    <div class="note">解析率按源单独算。全局算没意义——syslog 那几万行系统日志
-      本来就没有对应解析器，混在一起会把 nginx 的 100% 拉到 1.7%。
-      这块读的是<b>本机</b>引擎的 metrics（6060 端口），其他节点的日志源要登上去看，
-      它们的告警结果则已经汇总在上面的列表里。</div>`;
-}
-
-function renderFwScenarios(sec) {
-  const d = sec?.data;
-  if (!d?.ok) { $("fwScenarios").innerHTML = ""; return; }
-  const rows = (d.scenarios || []).slice(0, 10).map(s => `
-    <div class="row">
-      <span class="k"><span>${esc(s.short)}</span></span>
-      <span class="v">${s.poured}
-        ${s.overflowed ? `<span class="tag crit">${s.overflowed} 触发</span>`
-                       : '<span class="tag">未触发</span>'}</span>
-    </div>`).join("");
-  $("fwScenarios").innerHTML = `
-    <h2><span class="dot ${d.overflowed_total ? "warn" : "ok"}"></span>检测场景
-      <span class="right">本机</span></h2>
-    <div class="stats">
-      <div class="stat"><div class="n">${d.poured_total}</div><div class="l">可疑事件</div></div>
-      <div class="stat"><div class="n" style="color:${d.overflowed_total?"var(--crit)":"var(--faint)"}">${d.overflowed_total}</div>
-        <div class="l">确认攻击</div></div>
-    </div>
-    ${rows ? `<div class="list">${rows}</div>` : '<div class="empty center">暂无场景命中</div>'}
-    <div class="note">左边是进桶的可疑事件，右边是达到阈值真正触发决策的。
-      两者差距大说明阈值设得合适，没有一有风吹草动就封人。
-      白名单放过 ${d.whitelist_hits} 次。</div>`;
-}
-
-/* 节点视图下的防火墙数据。只过滤告警派生的那几块——封禁列表不过滤，
-   因为封禁本来就是全局决策、对所有节点生效，按机器筛掉反而让人以为
-   别的机器没被保护。 */
-function nodeFwView(d, name) {
-  const alerts = (d.alerts || []).filter(a => a.machine === name);
-  const tally = {}, country = {}, asn = {};
-  for (const a of alerts) {
-    if (a.ip) {
-      const t = tally[a.ip] || (tally[a.ip] = {ip: a.ip, count: 0, country: a.country,
-                                               as_name: a.as_name, scenarios: new Set(),
-                                               machines: [name]});
-      t.count++;
-      if (a.scenario_cn || a.scenario) t.scenarios.add(a.scenario_cn || a.scenario);
-    }
-    const cc = (a.country || "").toUpperCase() || "??";
-    const c = country[cc] || (country[cc] = {code: cc, count: 0, ips: new Set()});
-    c.count++; if (a.ip) c.ips.add(a.ip);
-    if (a.as_name) {
-      const s = asn[a.as_name] || (asn[a.as_name] = {as_name: a.as_name, count: 0,
-                                                     country: a.country, ips: new Set()});
-      s.count++; if (a.ip) s.ips.add(a.ip);
-    }
-  }
-  const pack = o => Object.values(o).map(x => ({...x, ips: x.ips.size}));
-  return {
-    ...d, alerts,
-    alerts_24h: alerts.filter(a => a.age_hours != null && a.age_hours <= 24).length,
-    top_sources: Object.values(tally).sort((a, b) => b.count - a.count).slice(0, 8)
-      .map(x => ({...x, scenarios: [...x.scenarios].sort()})),
-    by_country: pack(country).sort((a, b) => b.count - a.count).slice(0, 12),
-    by_asn: pack(asn).sort((a, b) => b.count - a.count).slice(0, 8)
-      .map(x => ({...x, as_label: x.as_name})),
-  };
-}
-
-function renderFirewall(sec, engineSec) {
-  const d = sec?.data;
-  if (!d) {
-    $("fwList").innerHTML = `<div class="empty">${esc(sec?.error || "CrowdSec 数据不可用")}</div>`;
-    return;
-  }
-  const node = currentNode();
-  // 引擎 metrics 读的是本机 6060，节点上没有对应数据
-  if (node) {
-    $("fwSources").innerHTML = `<h2><span class="dot"></span>防护引擎 · 日志源
-      <span class="right">${machineTag(node.name)}</span></h2>
-      <div class="empty center" style="padding:24px 12px; line-height:1.7">
-        引擎 metrics 只在本机采（6060 端口）。<br>
-        <span style="font-size:12px; color:var(--faint)">
-          这台节点读了哪些日志、解析率多少，要 ssh 上去 cscli metrics 看。
-          它检出的攻击结果已经汇总在下面的列表里</span>
-      </div>`;
-    $("fwScenarios").innerHTML = "";
-  } else {
-    renderFwSources(engineSec); renderFwScenarios(engineSec);
-  }
-  const view = node ? nodeFwView(d, node.name) : d;
-  renderFwNodes(d);          // 节点清单始终显示全部，这是跨节点的健康总览
-  renderFwStat(view); renderFwTop(view); renderFwGeo(view); renderFwAsn(view);
-  renderFwList(d);           // 封禁列表不过滤，见 nodeFwView 的注释
-}
+/* Homelab 面板前端 · 页签与调度
+
+   连接、端口、历史、设置、审计、容器这几个页签，加上整个调度层：
+   导航、机器切换、5 秒轮询、事件委托、启动。
+
+   调度必须最后加载——它引用前面三个文件里的几乎所有渲染函数。
+   全站唯一一批顶层立即执行的语句也都在这个文件里，其余三个文件只有
+   函数与常量声明，所以加载顺序只有这一条约束。
+
+   —— 前端拆成四个文件，按加载顺序：
+        app-core.js      工具、格式化、SVG 图表、请求与写操作、登录
+        app-nodes.js     机器视图：总览卡片、节点视图、fleet 横排
+        app-security.js  防护线：告警条、防火墙、白名单、安全中心
+        app.js           其余页签与调度（必须最后加载，它引用前面全部）
+
+   仍然无构建、无 npm 依赖，index.html 里顺序引入即可。不用 ES module：
+   那需要把几十个跨文件互相调用的函数逐个 export/import，而这些文件本来就
+   共享同一份全局状态（activeNode、fleetItems、lastSections…），
+   拆成模块反而要为每个状态再造一层访问器。普通 script 共享全局词法作用域，
+   拆完之后函数之间的调用关系一行没变。 */
 
 /* ================= 连接 ================= */
 
@@ -1427,67 +99,6 @@ function renderConns(sec) {
     }).join("")}</tbody></table>` : `<div class="empty">没有匹配的连接</div>`;
 }
 
-/* ================= 白名单 ================= */
-
-let wlConfirm = null;
-
-async function loadWhitelist() {
-  let d;
-  try {
-    d = await (await fetch("/api/firewall/whitelist")).json();
-  } catch (e) {
-    $("wlList").innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`;
-    return;
-  }
-  const items = d.items || [];
-  const released = d.recent_released || [];
-  $("wlList").innerHTML = (items.length ? `<table class="tbl">
-    <thead><tr><th>IP / 网段</th><th>备注</th><th>加入时间</th>
-      <th>已放行</th><th></th></tr></thead>
-    <tbody>${items.map(x => {
-      const pending = wlConfirm === x.ip;
-      return `<tr>
-        <td class="ipcell">${esc(x.ip)}</td>
-        <td class="why">${esc(x.note || "—")}</td>
-        <td style="color:var(--dim); white-space:nowrap">${clock(x.added_at)}</td>
-        <td style="font-variant-numeric:tabular-nums">${x.hits || 0} 次${
-          x.last_hit ? `<span style="color:var(--faint)"> · ${ago(x.last_hit)}</span>` : ""}</td>
-        <td class="act"><button class="btn sm ${pending ? "confirm" : "ghost"}"
-          data-wldel="${esc(x.ip)}">${pending ? "确认移除" : "移除"}</button></td>
-      </tr>`;
-    }).join("")}</tbody></table>`
-    : `<div class="empty">白名单为空</div>`) +
-    (released.length ? `<div class="note">最近自动放行：${
-      released.slice(-5).map(r => esc(r.ip)).join("、")}</div>` : "") +
-    `<div class="note">这不是 CrowdSec 原生 whitelist（那要改配置文件加重启，容器里做不到）。
-     实现方式是每轮采集后比对封禁列表，命中就立刻调 LAPI 解封——IP 仍会被封最多一个
-     采集周期（30 秒），但不用碰 CrowdSec 任何配置，社区黑名单同步进来也照样能捞回。</div>`;
-}
-
-async function doWhitelistAdd(ip, note) {
-  try {
-    const r = await api("/api/firewall/whitelist", "POST", {ip, note});
-    toast(`已加入白名单 ${r.ip}`,
-      r.released ? `顺带解封了 ${r.released} 条现有封禁` : "");
-    $("wlIp").value = ""; $("wlNote").value = "";
-    await loadWhitelist();
-    await refresh();
-  } catch (e) {
-    toast("加白名单失败", e.message, true);
-  }
-}
-
-async function doWhitelistRemove(ip) {
-  try {
-    await api(`/api/firewall/whitelist/${encodeURIComponent(ip)}`, "DELETE");
-    toast(`已移出白名单 ${ip}`, "");
-  } catch (e) {
-    toast("移除失败", e.message, true);
-  }
-  wlConfirm = null;
-  await loadWhitelist();
-}
-
 /* ================= 端口 ================= */
 
 let portFilter = "all", portQuery = "";
@@ -1557,14 +168,25 @@ let histRange = 24, histLoaded = false;
 const SPARK_METRICS = "cpu,mem,net_rx,net_tx,load1,bans";
 
 async function loadHistory() {
-  const wanted = ["cpu", "mem", "net_rx", "net_tx", "load1", "temp", "bans"];
-  const vols = (lastSections?.storage?.data?.volumes || [])
+  /* 节点也有历史了。以前这页在节点视图下整页盖住，理由是"跨节点存时序要另设计
+     一套 schema"——那个代价当时被高估了：指标 key 加个 node: 前缀就够，
+     metrics 表一列没加，series() 一行没改。
+
+     节点采的项比本机少（60 秒一轮，只落负载/内存/最满的盘/容器/落地封禁/
+     温度/网络），所以曲线分组也少几组，但不再是一片空白。 */
+  const node = isLocal() ? null : activeNode;
+  const wanted = node
+    ? ["load_percent", "mem", "disk_max", "temp", "net_rx", "net_tx",
+       "containers_running", "guard_entries"]
+    : ["cpu", "mem", "net_rx", "net_tx", "load1", "temp", "bans"];
+  const vols = node ? [] : (lastSections?.storage?.data?.volumes || [])
     .filter(v => v.ok).map(v => `vol:${v.label}`);
   const metrics = wanted.concat(vols).join(",");
   let data;
   try {
     const res = await fetch(
-      `/api/history/multi?metrics=${encodeURIComponent(metrics)}&hours=${histRange}&points=140`);
+      `/api/history/multi?metrics=${encodeURIComponent(metrics)}&hours=${histRange}&points=140` +
+      (node ? `&node=${encodeURIComponent(node)}` : ""));
     data = await res.json();
   } catch (e) {
     $("histCharts").innerHTML = `<div class="card full"><div class="empty">
@@ -1581,7 +203,15 @@ async function loadHistory() {
   // 共用一根纵轴才比得出比例。
   // floor/ceil 是数值天花板（占用率不可能为负、不会超 100），minSpan 决定
   // 平稳数据留多大的"呼吸空间"，两者一起防住纵轴被噪音撑爆
-  const groups = [
+  const groups = node ? [
+    ["负载与内存", [["负载", "load_percent"], ["内存", "mem"]],
+     {floor: 0, ceil: 100, minSpan: 15, fmt: pct}],
+    ["网络流量", [["下行", "net_rx"], ["上行", "net_tx"]], {floor: 0, fmt: rate}],
+    ["最满的盘", [["使用率", "disk_max"]],
+     {floor: 0, ceil: 100, minSpan: 12, fmt: pct}],
+    ["容器与落地封禁", [["运行中容器", "containers_running"], ["落地规则", "guard_entries"]],
+     {floor: 0, minSpan: 3, fmt: v => Math.round(v).toLocaleString()}],
+  ] : [
     ["处理器与内存", [["CPU", "cpu"], ["内存", "mem"]],
      {floor: 0, ceil: 100, minSpan: 15, fmt: pct}],
     ["网络流量", [["下行", "net_rx"], ["上行", "net_tx"]],
@@ -1598,11 +228,15 @@ async function loadHistory() {
     // 一条线都没有的分组直接不渲染，别留一堆"暂无数据"的空卡片
     if (!lines.length) return "";
     return card(title, "info", chart(lines, opts), "flat");
-  }).join("") || `<div class="card full flat"><div class="empty">
-    历史数据采集中，稍后再来看</div></div>`;
+  }).join("") || `<div class="card full flat"><div class="empty center"
+    style="padding:30px 20px; line-height:1.7">${node
+      ? `还没有 ${esc(currentFleet()?.name || node)} 的历史数据<br>
+         <span style="font-size:12px; color:var(--faint)">
+           节点指标每 60 秒采一次，接入后要等几轮才画得出趋势</span>`
+      : "历史数据采集中，稍后再来看"}</div></div>`;
 
-  // 时间范围在四张图里是同一段，标在区块标题上一次就够
-  const span = [S.cpu, S.mem, S.load1].find(s => (s || []).length >= 2);
+  // 时间范围在几张图里是同一段，标在区块标题上一次就够
+  const span = [S.cpu, S.mem, S.load1, S.load_percent].find(s => (s || []).length >= 2);
   $("histSpan").textContent = span
     ? timeSpan(span[0].ts, span[span.length - 1].ts) : "";
 
@@ -1920,702 +554,16 @@ async function loadSnapshots() {
      卷是只读挂载，而面板没有登录，给它删快照的权限风险大于收益。</div>`;
 }
 
-/* ================= 登录 ================= */
-
-let loginShown = false;
-
-function showLogin(msg) {
-  const wall = $("loginWall");
-  if (!wall) return;
-  wall.classList.remove("hide");
-  if (msg) {
-    $("loginErr").textContent = msg;
-    $("loginErr").classList.remove("hide");
-  }
-  // 只在第一次弹出时聚焦。轮询每 5 秒撞一次 401，反复抢焦点会让人打不完密码
-  if (!loginShown) {
-    loginShown = true;
-    $("loginUser").focus();
-  }
-}
-
-function hideLogin() {
-  $("loginWall")?.classList.add("hide");
-  $("loginErr")?.classList.add("hide");
-  loginShown = false;
-}
-
-async function doLogin(ev) {
-  ev.preventDefault();
-  const btn = $("loginBtn"), err = $("loginErr");
-  btn.disabled = true; btn.textContent = "登录中…";
-  err.classList.add("hide");
-  try {
-    const res = await _fetch("/api/auth/login", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({username: $("loginUser").value,
-                            password: $("loginPass").value}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-    $("loginPass").value = "";
-    hideLogin();
-    refresh(); loadMeta(); loadSparks();
-  } catch (e) {
-    err.textContent = e.message;
-    err.classList.remove("hide");
-    $("loginPass").select();
-  } finally {
-    btn.disabled = false; btn.textContent = "登录";
-  }
-}
-
-async function checkAuth() {
-  try {
-    const d = await (await _fetch("/api/auth/state")).json();
-    if (d.enabled && !d.logged_in) showLogin(
-      d.locked_for ? `失败次数过多，请 ${d.locked_for} 秒后再试` : "");
-    renderAuthCard(d);
-    return d;
-  } catch { return null; }
-}
-
-function renderAuthCard(d) {
-  const box = $("setAuth");
-  if (!box) return;
-  if (!d?.enabled) {
-    // 没开登录时也要说话——多机场景下这是个真实风险，不该静悄悄
-    box.innerHTML = `<h2><span class="dot warn"></span>面板登录</h2>
-      <div class="note" style="margin-top:8px">未开启。面板能操作所有接入节点的防火墙，
-        建议在 config.yaml 的 <code>auth</code> 段填上用户名和密码：
-        <br><br><code>auth:<br>
-        &nbsp;&nbsp;username: admin<br>
-        &nbsp;&nbsp;password: "……"</code><br><br>
-        密码可以直接写明文，也可以用
-        <code>python -m backend.hashpw '密码'</code> 生成散列后填入——
-        config.yaml 常会被贴出来排查问题，散列贴出去不算泄漏。</div>`;
-    return;
-  }
-  box.innerHTML = `<h2><span class="dot ok"></span>面板登录
-      <span class="right">已登录为 ${esc(d.username || "")}</span></h2>
-    <div class="form" style="margin-top:12px">
-      <button class="btn ghost" id="logoutBtn">退出登录</button>
-      <span class="note" style="margin:0">退出后本浏览器需要重新登录，
-        其他已登录的设备不受影响</span>
-    </div>`;
-  $("logoutBtn").onclick = async () => {
-    await _fetch("/api/auth/logout", {method: "POST"}).catch(() => {});
-    showLogin("已退出登录");
-  };
-}
-
-/* ================= 写操作 ================= */
-
-function token() { return localStorage.getItem("panelToken") || ""; }
-
-async function api(path, method = "POST", body) {
-  const headers = {};
-  if (body) headers["Content-Type"] = "application/json";
-  const t = token();
-  if (t) headers["X-Panel-Token"] = t;
-  const res = await fetch(path, {method, headers,
-    body: body ? JSON.stringify(body) : undefined});
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-  return data;
-}
-
-async function doBan(ip, duration, reason) {
-  const btn = $("banBtn");
-  btn.disabled = true; btn.textContent = "提交中…";
-  try {
-    const r = await api("/api/firewall/ban", "POST", {ip, duration, reason});
-    toast(`已封禁 ${r.ip}`, `${r.duration_label} · bouncer 约 10 秒后下发到 iptables`);
-    $("banIp").value = ""; $("banWhy").value = "";
-    await refresh();
-  } catch (e) {
-    toast("封禁失败", e.message, true);
-  } finally {
-    btn.disabled = false; btn.textContent = "封禁";
-  }
-}
-
-async function doUnban(ip) {
-  try {
-    const r = await api("/api/firewall/unban", "POST", {ip});
-    toast(`已解封 ${r.ip}`, `移除 ${r.removed} 条决策`);
-  } catch (e) {
-    toast("解封失败", e.message, true);
-  }
-  fwConfirm = null;
-  await refresh();
-}
-
-async function doContainer(name, action) {
-  try {
-    await api(`/api/containers/${encodeURIComponent(name)}/${action}`);
-    toast(`${name} 已${{restart:"重启", stop:"停止", start:"启动"}[action]}`, "");
-  } catch (e) {
-    toast(`操作失败`, e.message, true);
-  }
-  ctrConfirm = null;
-  await refresh();
-  if (activeTab === "history") loadAudit();
-}
-
-async function showLogs(name) {
-  $("modal").innerHTML = `<div class="modal"><div class="modal-box">
-    <div class="modal-head"><h3>${esc(name)}</h3>
-      <span class="sp"></span>
-      <button class="btn sm ghost" id="logRefresh">刷新</button>
-      <button class="btn sm ghost" id="logClose">关闭</button></div>
-    <pre class="logbox" id="logBody">加载中…</pre></div></div>`;
-  const close = () => { $("modal").innerHTML = ""; };
-  $("logClose").onclick = close;
-  $("modal").querySelector(".modal").onclick = e => {
-    if (e.target.classList.contains("modal")) close();
-  };
-  const load = async () => {
-    try {
-      const d = await (await fetch(
-        `/api/containers/${encodeURIComponent(name)}/logs?lines=300`)).json();
-      if (d.detail) throw new Error(d.detail);
-      const box = $("logBody");
-      box.textContent = d.text || "(无输出)";
-      box.scrollTop = box.scrollHeight;
-    } catch (e) {
-      $("logBody").textContent = "读取失败：" + e.message;
-    }
-  };
-  $("logRefresh").onclick = load;
-  load();
-}
-
-async function loadMeta() {
-  try {
-    fwMeta = await (await fetch("/api/firewall/meta")).json();
-  } catch { return; }
-  $("banDur").innerHTML = (fwMeta.durations || [])
-    .map(d => `<option value="${d.value}"${d.value === "4h" ? " selected" : ""}>${esc(d.label)}</option>`)
-    .join("");
-  if (!fwMeta.enabled) {
-    $("fwOff").classList.remove("hide");
-    $("fwOff").innerHTML = "<b>写操作已禁用</b>——在 config.yaml 里把 <code>firewall.enabled</code> 设为 true 后重启容器。";
-    ["banIp","banDur","banWhy","banBtn"].forEach(i => $(i).disabled = true);
-  }
-  if (fwMeta.write_locked) {
-    $("fwOff").classList.remove("hide");
-    $("fwOff").innerHTML = "<b>写操作已锁定</b>——既没开登录也没配操作令牌时，" +
-      "封禁与容器操作一律拒绝。三选一：在 config.yaml 的 <code>auth</code> 段" +
-      "填用户名密码（推荐，登录后自动放行）、<code>firewall.write_token</code> " +
-      "填一串随机字符（给脚本调用用），或在完全可信的内网里设 " +
-      "<code>allow_anonymous_write: true</code>。改完重启容器。";
-    ["banIp","banDur","banWhy","banBtn"].forEach(i => $(i).disabled = true);
-  } else if (fwMeta.enabled) {
-    // 上一轮如果锁着，控件被禁用了，解锁后要恢复——meta 在登录后会重拉，
-    // 那时拿到的结果和登录前不同。firewall.enabled 为 false 时不能走这里，
-    // 否则会把上面刚禁用的控件又打开
-    $("fwOff").classList.add("hide");
-    ["banIp","banDur","banWhy","banBtn"].forEach(i => $(i).disabled = false);
-  }
-  if (fwMeta.token_required) {
-    $("tokenRow").classList.remove("hide");
-    $("tokenIn").value = token();
-  }
-  $("fwNote").innerHTML =
-    `受保护网段不可封禁：<span class="mono">${(fwMeta.protected_networks || []).join("  ")}</span>` +
-    `<br>封禁经 LAPI 写入，firewall-bouncer 轮询后下发 iptables，生效有约 10 秒延迟。` +
-    (fwMeta.notify_enabled ? "" : `<br>推送未启用，新封禁不会通知你。在 config.yaml 的 notify 段填 Server 酱 sendkey。`);
-}
-
-/* ================= 安全中心 ================= */
-
-let secRange = 168, secData = null, secLoadedAt = 0, secLoading = false;
-let secBanConfirm = null, secRollbackConfirm = null;
-let secMapMode = "world", secLeaflet = null, secMarkerLayer = null;
-let secMapRenderedMode = null, secBasemapLayers = null, secTileLayer = null;
-let secMapSourceEl = null, overviewMiniLeaflet = null, overviewMiniMarkers = null;
-let overviewMiniBase = null, localMapDataPromise = null;
-
-const CHINA_CITY_LABELS = [
-  ["北京市",39.9042,116.4074,1],["上海市",31.2304,121.4737,1],
-  ["广东省广州市",23.1291,113.2644,1],["广东省深圳市",22.5431,114.0579,1],
-  ["香港特别行政区",22.3193,114.1694,1],["澳门特别行政区",22.1987,113.5439,1],
-  ["四川省成都市",30.5728,104.0668,2],["湖北省武汉市",30.5928,114.3055,2],
-  ["陕西省西安市",34.3416,108.9398,2],["重庆市",29.5630,106.5516,2],
-  ["天津市",39.0842,117.2010,2],["江苏省南京市",32.0603,118.7969,2],
-  ["浙江省杭州市",30.2741,120.1551,2],["台湾省台北市",25.0330,121.5654,2],
-  ["辽宁省沈阳市",41.8057,123.4315,3],["吉林省长春市",43.8171,125.3235,3],
-  ["黑龙江省哈尔滨市",45.8038,126.5349,3],["河北省石家庄市",38.0428,114.5149,3],
-  ["山西省太原市",37.8706,112.5489,3],["山东省济南市",36.6512,117.1201,3],
-  ["河南省郑州市",34.7466,113.6254,3],["安徽省合肥市",31.8206,117.2272,3],
-  ["福建省福州市",26.0745,119.2965,3],["江西省南昌市",28.6820,115.8579,3],
-  ["湖南省长沙市",28.2282,112.9388,3],["海南省海口市",20.0440,110.1999,3],
-  ["贵州省贵阳市",26.6470,106.6302,3],["云南省昆明市",25.0389,102.7183,3],
-  ["甘肃省兰州市",36.0611,103.8343,3],["青海省西宁市",36.6171,101.7782,3],
-  ["内蒙古自治区呼和浩特市",40.8426,111.7492,3],
-  ["广西壮族自治区南宁市",22.8170,108.3665,3],
-  ["西藏自治区拉萨市",29.6520,91.1721,3],
-  ["宁夏回族自治区银川市",38.4872,106.2309,3],
-  ["新疆维吾尔自治区乌鲁木齐市",43.8256,87.6168,3],
-];
-
-const secStatusName = s => ({open:"待处理", investigating:"调查中",
-  resolved:"已处理", ignored:"已忽略"}[s] || s || "待处理");
-const secChangeName = s => ({pending:"执行中", applied:"已生效", failed:"失败",
-  rolled_back:"已回滚", auto_rolled_back:"自动回滚", rollback_failed:"回滚失败"}[s] || s);
-
-function loadLocalMapData() {
-  if (!localMapDataPromise) localMapDataPromise = Promise.all([
-    fetch("/static/maps/world.geojson", {cache:"force-cache"}).then(r => {
-      if (!r.ok) throw new Error(`世界底图 HTTP ${r.status}`); return r.json();
-    }),
-    fetch("/static/maps/china-provinces.geojson", {cache:"force-cache"}).then(r => {
-      if (!r.ok) throw new Error(`中国底图 HTTP ${r.status}`); return r.json();
-    }),
-  ]).then(([world, china]) => ({world, china}));
-  return localMapDataPromise;
-}
-
-function createWorldLayer(data, pane, compact=false) {
-  return L.geoJSON(data, {pane, interactive:false, style: {
-    className:"local-basemap-shape", color:compact ? "#C9C4B8" : "#C2BDB1",
-    weight:compact ? .65 : .85, fillColor:compact ? "#F7F5EF" : "#FAF9F5",
-    fillOpacity:compact ? .92 : .9,
-  }});
-}
-
-function createChinaLayer(data, pane) {
-  return L.geoJSON(data, {pane, interactive:false, style: {
-    className:"local-basemap-shape local-china-shape", color:"#B7B1A4",
-    weight:.8, fillColor:"#EFECE3", fillOpacity:.32,
-  }});
-}
-
-function mapLabel(text, lat, lon, kind="country") {
-  return L.marker([lat,lon], {pane:"secLabelsPane", interactive:false,
-    icon:L.divIcon({className:`local-map-label ${kind}`, html:`<span>${esc(text)}</span>`,
-      iconSize:null, iconAnchor:[0,0]})});
-}
-
-function setSecurityMapSource(text, state="local") {
-  if (!secMapSourceEl) return;
-  secMapSourceEl.textContent = text;
-  secMapSourceEl.className = `map-source-state ${state}`;
-}
-
-function renderSecurityBaseLabels() {
-  if (!secLeaflet || !secBasemapLayers) return;
-  const {worldData, chinaData, labels} = secBasemapLayers;
-  labels.clearLayers();
-  const zoom = secLeaflet.getZoom();
-  if (secMapMode === "china") {
-    if (zoom >= 4) for (const f of chinaData.features || []) {
-      const p = f.properties || {};
-      if (Number(p.min_zoom || 4.5) > zoom + .8) continue;
-      if (Number.isFinite(Number(p.label_lat)) && Number.isFinite(Number(p.label_lon)))
-        mapLabel(p.name_zh || p.name_en, Number(p.label_lat), Number(p.label_lon), "province").addTo(labels);
-    }
-    const cityRank = zoom >= 5 ? 3 : zoom >= 4 ? 2 : 1;
-    for (const [name,lat,lon,rank] of CHINA_CITY_LABELS)
-      if (rank <= cityRank) mapLabel(name,lat,lon,"city").addTo(labels);
-  } else {
-    const labelCount = zoom >= 4 ? 110 : zoom >= 3 ? 60 : zoom >= 2 ? 28 : 14;
-    const countries = [...(worldData.features || [])].filter(f => {
-      const p = f.properties || {}, lat = Number(p.label_y), lon = Number(p.label_x);
-      return Number.isFinite(lat) && Number.isFinite(lon);
-    }).sort((a,b) => Number(b.properties?.pop_est || 0) - Number(a.properties?.pop_est || 0));
-    for (const f of countries.slice(0,labelCount)) {
-      const p = f.properties || {};
-      mapLabel(COUNTRY[p.iso_a2] || p.name_zh || p.name_en,
-        Number(p.label_y),Number(p.label_x),"country").addTo(labels);
-    }
-  }
-}
-
-function applySecurityBasemapMode() {
-  if (!secLeaflet || !secBasemapLayers) return;
-  const china = secBasemapLayers.china;
-  if (secMapMode === "china" && !secLeaflet.hasLayer(china)) china.addTo(secLeaflet);
-  if (secMapMode !== "china" && secLeaflet.hasLayer(china)) secLeaflet.removeLayer(china);
-  renderSecurityBaseLabels();
-}
-
-function initSecurityBasemap(map) {
-  setSecurityMapSource("本地简图");
-  loadLocalMapData().then(({world,china}) => {
-    if (map !== secLeaflet) return;
-    const worldLayer = createWorldLayer(world,"secBasemapPane").addTo(map);
-    const chinaLayer = createChinaLayer(china,"secBasemapPane");
-    const labels = L.layerGroup().addTo(map);
-    secBasemapLayers = {world:worldLayer, china:chinaLayer, labels,
-      worldData:world, chinaData:china};
-    map.attributionControl.addAttribution(
-      '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a>');
-    applySecurityBasemapMode();
-  }).catch(() => setSecurityMapSource("本地底图加载失败", "error"));
-}
-
-function ensureSecurityMap(mapCfg) {
-  if (!window.L) {
-    $("secMap").innerHTML = '<div class="secmap-empty">本地地图组件加载失败，请刷新页面</div>';
-    return null;
-  }
-  if (secLeaflet) return secLeaflet;
-  secLeaflet = L.map("secMap", {
-    zoomControl:true, scrollWheelZoom:true, doubleClickZoom:true,
-    touchZoom:true, keyboard:true, minZoom:1,
-    maxZoom:Number(mapCfg?.max_zoom || 12), worldCopyJump:true,
-  });
-  secLeaflet.createPane("secBasemapPane");
-  secLeaflet.getPane("secBasemapPane").style.zIndex = 210;
-  secLeaflet.getPane("secBasemapPane").style.pointerEvents = "none";
-  secLeaflet.createPane("secLabelsPane");
-  secLeaflet.getPane("secLabelsPane").style.zIndex = 350;
-  secLeaflet.getPane("secLabelsPane").style.pointerEvents = "none";
-  const SourceControl = L.Control.extend({onAdd() {
-    secMapSourceEl = L.DomUtil.create("div", "map-source-state local");
-    secMapSourceEl.textContent = "本地简图"; return secMapSourceEl;
-  }});
-  new SourceControl({position:"bottomright"}).addTo(secLeaflet);
-  initSecurityBasemap(secLeaflet);
-
-  const tileUrl = mapCfg?.external_tiles ? String(mapCfg?.tile_url || "") : "";
-  if (tileUrl) {
-    let loaded = 0, failed = 0;
-    secTileLayer = L.tileLayer(tileUrl, {
-      maxZoom:Number(mapCfg?.max_zoom || 12),
-      attribution:mapCfg?.attribution || "",
-    }).addTo(secLeaflet);
-    secTileLayer.on("tileload", () => { loaded++; setSecurityMapSource("详细底图", "detail"); });
-    secTileLayer.on("tileerror", () => {
-      failed++;
-      if (!loaded && failed >= 4 && secLeaflet?.hasLayer(secTileLayer)) {
-        secLeaflet.removeLayer(secTileLayer);
-        setSecurityMapSource("详细底图不可用 · 已切换本地简图", "fallback");
-      }
-    });
-  }
-  secMarkerLayer = L.layerGroup().addTo(secLeaflet);
-  L.control.scale({imperial:false, position:"bottomleft"}).addTo(secLeaflet);
-  secLeaflet.on("zoomend", renderSecurityBaseLabels);
-  return secLeaflet;
-}
-
-function destroyOverviewMiniMap() {
-  if (overviewMiniLeaflet) overviewMiniLeaflet.remove();
-  overviewMiniLeaflet = null; overviewMiniMarkers = null; overviewMiniBase = null;
-}
-
-function renderOverviewMiniMap(incidents) {
-  const container = $("overviewMiniMap");
-  if (!container || !window.L) return;
-  if (overviewMiniLeaflet && overviewMiniLeaflet.getContainer() !== container)
-    destroyOverviewMiniMap();
-  if (!overviewMiniLeaflet) {
-    overviewMiniLeaflet = L.map(container, {zoomControl:false, attributionControl:false,
-      dragging:false, scrollWheelZoom:false, doubleClickZoom:false, touchZoom:false,
-      keyboard:false, boxZoom:false, minZoom:1, maxZoom:3, worldCopyJump:true});
-    overviewMiniLeaflet.createPane("overviewBasemapPane");
-    overviewMiniLeaflet.getPane("overviewBasemapPane").style.zIndex = 210;
-    overviewMiniLeaflet.getPane("overviewBasemapPane").style.pointerEvents = "none";
-    overviewMiniMarkers = L.layerGroup().addTo(overviewMiniLeaflet);
-    overviewMiniLeaflet.fitBounds([[-55,-175],[75,175]], {padding:[4,4], animate:false});
-  }
-  if (!overviewMiniBase) {
-    overviewMiniBase = {loading:true, layer:null};
-    const map = overviewMiniLeaflet;
-    loadLocalMapData().then(({world}) => {
-      if (map !== overviewMiniLeaflet) return;
-      overviewMiniBase.layer = createWorldLayer(world,"overviewBasemapPane",true).addTo(map);
-    }).catch(() => { if (map === overviewMiniLeaflet) container.classList.add("map-failed"); });
-  }
-  overviewMiniMarkers.clearLayers();
-  for (const item of incidents || []) {
-    const geo = mapGeo(item);
-    if (!geo) continue;
-    const events = Math.max(1, Number(item.event_count || item.count || 1));
-    L.circleMarker(geo, {radius:Math.min(9,3 + Math.log2(events + 1)),
-      color:item.blocked ? "#BC4C3C" : "#FFFFFF", weight:item.blocked ? 2 : 1.2,
-      fillColor:"#D97757", fillOpacity:.78})
-      .bindTooltip(`${esc(item.location_name || cname(item.country || ""))} · ${events} 事件`,
-        {direction:"top", className:"overview-map-tip"}).addTo(overviewMiniMarkers);
-  }
-  setTimeout(() => overviewMiniLeaflet?.invalidateSize({pan:false}), 0);
-}
-
-function mapEmpty(message) {
-  let el = document.getElementById("secMapEmpty");
-  if (!message) { if (el) el.remove(); return; }
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "secMapEmpty"; el.className = "secmap-empty";
-    $("secMap").appendChild(el);
-  }
-  el.textContent = message;
-}
-
-function mapGeo(item) {
-  if (item.latitude === null || item.latitude === undefined || item.latitude === "" ||
-      item.longitude === null || item.longitude === undefined || item.longitude === "") return null;
-  const lat = Number(item.latitude), lon = Number(item.longitude);
-  return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
-    ? [lat, lon] : null;
-}
-
-function addAttackMarker(row, label, detail="") {
-  const r = Math.min(18, 5 + Math.log2(row.events + 1) * 2.1);
-  const blockedText = row.blocked ? `${row.blocked} 个当前封禁` : "当前无封禁";
-  L.circleMarker([row.lat, row.lon], {
-    radius:r, color:row.blocked ? "#BC4C3C" : "#FFFFFF",
-    weight:row.blocked ? 3 : 2, fillColor:"#D97757", fillOpacity:.76,
-  }).bindTooltip(`<div class="map-tip-head">${esc(label)}</div>` +
-    (row.coordinate ? `<div class="map-tip-coord">${esc(row.coordinate)}</div>` : "") +
-    `<div class="map-tip-counts"><span>${row.sources} 个攻击源</span><span>${row.events} 个事件</span></div>` +
-    (detail ? `<div class="map-provider">${esc(detail)}</div>` : "") +
-    `<div class="map-tip-status ${row.blocked ? "blocked" : "clear"}"><i></i>${blockedText}</div>`,
-    {direction:"auto", offset:[10,0], opacity:1, className:"attack-tooltip"}).addTo(secMarkerLayer);
-}
-
-function renderMapRank(rows, emptyText) {
-  const maxEvents = Math.max(1, ...rows.map(x => x.events));
-  $("secMapRank").innerHTML = `<div class="secmap-legend">
-      <span class="map-key"><i class="map-dot"></i>检测到攻击</span>
-      <span class="map-key"><i class="map-dot blocked"></i>存在当前封禁</span>
-    </div>${rows.slice(0,8).map((x,i) => `<div class="row" title="${esc(x.title || x.label)}">
-      <span class="k"><b style="font-weight:500">${i+1}. ${esc(x.label)}</b>
-        <span class="tag">${x.sources} 源</span>${x.blocked ? `<span class="tag crit">${x.blocked} 封</span>` : ""}</span>
-      <span class="bar"><i class="${x.blocked ? "crit" : ""}" style="width:${Math.max(4,x.events/maxEvents*100).toFixed(1)}%"></i></span>
-      <span class="v">${x.events} 事件</span>
-    </div>`).join("") || `<div class="empty center">${esc(emptyText)}</div>`}`;
-}
-
-function renderSecurityMap(incidents, mapCfg={}) {
-  document.querySelectorAll("[data-sec-map]").forEach(x =>
-    x.classList.toggle("on", x.dataset.secMap === secMapMode));
-  const map = ensureSecurityMap(mapCfg);
-  if (!map) return;
-  secMarkerLayer.clearLayers();
-  mapEmpty("");
-  applySecurityBasemapMode();
-
-  if (secMapMode === "china") {
-    const domesticCodes = new Set(["CN","HK","MO","TW"]), regions = {};
-    let domesticSources = 0, blockedSources = 0, unlocated = 0;
-    for (const item of incidents || []) {
-      const code = String(item.country || "").trim().toUpperCase();
-      if (!domesticCodes.has(code)) continue;
-      domesticSources++;
-      if (item.blocked) blockedSources++;
-      const geo = mapGeo(item);
-      if (!geo) { unlocated++; continue; }
-      const lat = Math.round(geo[0] * 2) / 2, lon = Math.round(geo[1] * 2) / 2;
-      const key = `${lat}:${lon}`;
-      const slot = regions[key] || (regions[key] = {
-        lat, lon, sources:0, events:0, blocked:0, providers:new Set(), places:new Set(),
-      });
-      slot.sources++;
-      slot.events += Math.max(1, Number(item.event_count || item.count || 1));
-      if (item.blocked) slot.blocked++;
-      if (item.as_label || item.as_name) slot.providers.add(item.as_label || item.as_name);
-      if (item.location_name) slot.places.add(item.location_name);
-    }
-    const rows = Object.values(regions).sort((a,b) => b.events - a.events).map(x => {
-      const providers = [...x.providers];
-      const places = [...x.places];
-      const providerSummary = providers.length
-        ? `网络归属：${providers.slice(0,2).join("、")}` +
-          (providers.length > 2 ? ` 等 ${providers.length} 家网络` : "")
-        : "网络归属未知";
-      const coordinate = `${x.lat.toFixed(1)}°N · ${x.lon.toFixed(1)}°E`;
-      const placeLabel = places.join("、") || "中国来源区域";
-      return {...x, label:placeLabel, coordinate,
-        title:providerSummary, providerSummary};
-    });
-    rows.forEach(x => addAttackMarker(x, x.label, x.providerSummary));
-    $("secMapMeta").textContent = `${rows.length} 个区域 · ${domesticSources} 个攻击源 · ${blockedSources} 个当前封禁`;
-    $("secMapHint").textContent = "中国来源按 0.5° 经纬网格聚合；滚轮、双指缩放，拖动查看";
-    $("secMapNote").textContent = "中国地图使用 CrowdSec 离线 GeoLite2-City 经纬度，只展示中国大陆及港澳台来源；没有省市字段时不猜省份。圆点大小表示事件量，红色外圈表示存在当前封禁。";
-    renderMapRank(rows, domesticSources ? `有 ${unlocated} 个中国来源缺少坐标` : "所选时间内没有中国来源攻击");
-    if (!rows.length)
-      mapEmpty(domesticSources ? "中国来源存在，但缺少可定位坐标" : "所选时间内没有中国来源攻击");
-    if (secMapRenderedMode !== "china") {
-      const chinaZoom = $("secMap").clientWidth >= 700 ? 4 : 3;
-      map.setView([35,104], chinaZoom, {animate:false});
-    }
-  } else {
-    const byCountry = {};
-    for (const item of incidents || []) {
-      const code = String(item.country || "").trim().toUpperCase();
-      if (!code || code === "??") continue;
-      const slot = byCountry[code] || (byCountry[code] = {
-        code, sources:0, events:0, blocked:0, latSum:0, lonSum:0, located:0,
-      });
-      slot.sources++;
-      slot.events += Math.max(1, Number(item.event_count || item.count || 1));
-      if (item.blocked) slot.blocked++;
-      const geo = mapGeo(item);
-      if (geo) { slot.latSum += geo[0]; slot.lonSum += geo[1]; slot.located++; }
-    }
-    const rows = Object.values(byCountry).map(x => {
-      const fallback = COUNTRY_POINT[x.code];
-      return {...x, label:cname(x.code), title:cname(x.code),
-        lat:x.located ? x.latSum/x.located : fallback?.[1],
-        lon:x.located ? x.lonSum/x.located : fallback?.[0]};
-    }).sort((a,b) => b.events - a.events);
-    rows.filter(x => Number.isFinite(x.lat) && Number.isFinite(x.lon))
-      .forEach(x => addAttackMarker(x, x.label));
-    const totalSources = rows.reduce((n,x) => n + x.sources, 0);
-    const blockedSources = rows.reduce((n,x) => n + x.blocked, 0);
-    $("secMapMeta").textContent = `${rows.length} 个国家 · ${totalSources} 个攻击源 · ${blockedSources} 个当前封禁`;
-    $("secMapHint").textContent = "世界地图按国家聚合；滚轮、双指缩放，拖动查看";
-    $("secMapNote").textContent = "世界地图按国家聚合攻击来源。本地 Natural Earth 简图不依赖 VPN、Key 或第三方请求；攻击 IP 与事件数据始终只在本页面本地叠加。";
-    renderMapRank(rows, "暂无国家级攻击数据");
-    if (!rows.length) mapEmpty("所选时间内没有可定位的攻击事件");
-    if (secMapRenderedMode !== "world")
-      map.fitBounds([[-55,-175],[75,175]], {padding:[8,8], animate:false});
-  }
-  secMapRenderedMode = secMapMode;
-  setTimeout(() => map.invalidateSize({pan:false}), 0);
-}
-
-function renderSecurityCenter(d) {
-  secData = d;
-  const c = d.coverage || {}, cc = c.counts || {};
-  const cDot = cc.crit ? "crit" : cc.warn ? "warn" : "ok";
-  $("secCoverage").innerHTML = `<h2><span class="dot ${cDot}"></span>保护覆盖
-      <span class="right">${c.status === "healthy" ? "链路正常" : "存在缺口"}</span></h2>
-    <div class="stats">
-      <div class="stat"><div class="n">${cc.assets ?? 0}</div><div class="l">受管资产</div></div>
-      <div class="stat"><div class="n" style="color:${cc.crit?"var(--crit)":"inherit"}">${cc.crit ?? 0}</div><div class="l">严重缺口</div></div>
-      <div class="stat"><div class="n" style="color:${cc.warn?"var(--warn)":"inherit"}">${cc.warn ?? 0}</div><div class="l">待确认</div></div>
-    </div>
-    <div class="note">节点在线 ${cc.nodes_online ?? 0}/${cc.nodes_total ?? 0}，资产来自当前采集快照</div>`;
-
-  $("secPipeline").innerHTML = `<h2><span class="dot ${cDot}"></span>防护闭环
-      <span class="right">检出 → 决策 → 下发 → 生效 → 命中</span></h2>
-    <div class="secpipe">${(c.pipeline || []).map((x, i) => `
-      <div class="secstage"><span>${i + 1}</span><b>${esc(x.label)}</b><em>${esc(x.value)}</em></div>`
-    ).join("")}</div>`;
-
-  const ap = d.appsec || {}, op = ap.onepanel || {}, ca = ap.crowdsec_appsec || {};
-  const appDot = op.available ? "ok" : ca.configured ? "warn" : "warn";
-  const caps = Object.entries(op.capabilities || {}).filter(([,v]) => v).map(([k]) => ({
-    waf:"规则防护", rate_limit:"限流", bot:"机器人", geo:"地域", allow_deny:"黑白名单"}[k] || k));
-  $("secAppsec").innerHTML = `<h2><span class="dot ${appDot}"></span>应用防护</h2>
-    <div class="big sm">${op.available ? "1Panel WAF" : ca.configured ? "CrowdSec AppSec" : "待接入"}
-      ${op.machine ? machineTag(op.machine) : ""}</div>
-    <div class="sub">${esc(op.message || ca.message || "")}</div>
-    ${caps.length ? `<div class="tagwrap" style="margin-top:12px">${caps.map(x => `<span class="tag ok">${esc(x)}</span>`).join("")}</div>` : ""}
-    ${op.available ? `<div class="note">请求记录 ${op.request_rows ?? "—"} · 攻击 ${op.attack_rows ?? "—"} · 拦截 ${op.blocked_rows ?? "—"}${(op.remote_nodes || []).length > 1 ? ` · 另 ${op.remote_nodes.length - 1} 个 WAF 节点` : ""}</div>` : ""}`;
-
-  const issues = c.issues || [];
-  $("secIssues").innerHTML = issues.length ? `<table class="tbl"><thead><tr>
-      <th>级别</th><th>机器/目标</th><th>缺口</th><th>建议</th></tr></thead><tbody>
-    ${issues.map(x => `<tr><td><span class="tag ${esc(x.level)}">${x.level === "crit" ? "严重" : "确认"}</span></td>
-      <td>${machineTag(x.machine)} ${x.target != null ? `<span class="mono">${esc(x.target)}</span>` : ""}</td>
-      <td>${esc(x.title)}</td><td class="why">${esc(x.detail)}</td></tr>`).join("")}</tbody></table>`
-    : `<div class="empty">当前采集范围内没有发现保护缺口</div>`;
-
-  const inc = d.incidents || {}, incidents = inc.items || [];
-  renderSecurityMap(incidents, d.map || {});
-  $("secIncidents").innerHTML = incidents.length ? `<table class="tbl"><thead><tr>
-      <th>攻击源</th><th>涉及机器</th><th>场景</th><th>次数</th><th>状态</th><th></th></tr></thead><tbody>
-    ${incidents.map(x => `<tr class="${x.false_positive ? "stale" : ""}">
-      <td><span class="ipcell">${esc(x.ip)}</span>${x.country ? ` <span class="tag">${esc(cname(x.country))}</span>` : ""}<br>
-        <span class="note">最近 ${esc(agoHours(x.last_age_hours))}${x.blocked ? " · 已封禁" : ""}</span></td>
-      <td><div class="tagwrap">${(x.machines || []).map(m => machineTag(m)).join("") || "—"}</div></td>
-      <td class="why" title="${esc((x.scenarios || []).join("、"))}">${esc((x.scenarios || []).join("、") || "—")}</td>
-      <td>${x.count} 组<br><span class="note">${x.event_count || 0} 事件</span></td>
-      <td><span class="tag ${x.status === "resolved" ? "ok" : x.status === "investigating" ? "warn" : ""}">${esc(secStatusName(x.status))}</span>
-        ${x.false_positive ? '<span class="tag">误报</span>' : ""}${x.note ? `<div class="note" title="${esc(x.note)}">${esc(x.note)}</div>` : ""}</td>
-      <td class="act"><button class="btn sm ghost" data-sec-cti="${esc(x.ip)}">情报</button>
-        <button class="btn sm ghost" data-sec-note="${esc(x.key)}">备注</button>
-        <button class="btn sm ghost" data-sec-status="${esc(x.key)}" data-status="${x.status === "resolved" ? "open" : "resolved"}">${x.status === "resolved" ? "重开" : "处理"}</button>
-        <button class="btn sm ghost" data-sec-fp="${esc(x.key)}">${x.false_positive ? "取消误报" : "误报"}</button>
-        ${x.blocked ? "" : `<button class="btn sm ${secBanConfirm === x.ip ? "confirm" : "danger"}" data-sec-ban="${esc(x.ip)}">${secBanConfirm === x.ip ? "再点确认" : "临时封禁"}</button>`}</td>
-    </tr>`).join("")}</tbody></table>` : `<div class="empty">所选时间内没有 CrowdSec 攻击事件</div>`;
-
-  const changes = d.changes || [];
-  $("secChanges").innerHTML = changes.length ? `<table class="tbl"><thead><tr>
-      <th>时间</th><th>目标</th><th>动作</th><th>状态</th><th>说明</th><th></th></tr></thead><tbody>
-    ${changes.map(x => `<tr><td>${clock(x.ts)}</td><td class="ipcell">${esc(x.target)}</td>
-      <td>${x.action === "ban" ? "临时封禁" : "解除封禁"}</td>
-      <td><span class="tag ${x.status === "applied" ? "warn" : x.status.includes("failed") ? "crit" : "ok"}">${esc(secChangeName(x.status))}</span></td>
-      <td class="why">${esc(x.detail || "")}</td><td class="act">${x.status === "applied" && x.action === "ban"
-        ? `<button class="btn sm ${secRollbackConfirm === x.id ? "confirm" : "ghost"}" data-sec-rollback="${esc(x.id)}">${secRollbackConfirm === x.id ? "再点确认" : "回滚"}</button>` : ""}</td></tr>`).join("")}
-    </tbody></table>` : `<div class="empty">还没有安全变更记录</div>`;
-  $("secUpdated").textContent = "核查于 " + new Date().toLocaleTimeString();
-}
-
-async function loadSecurity(force=false) {
-  if (secLoading || (!force && Date.now() - secLoadedAt < 20000)) return;
-  secLoading = true;
-  try {
-    const res = await fetch(`/api/security/overview?hours=${secRange}&limit=200`, {cache:"no-store"});
-    const d = await res.json();
-    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
-    secLoadedAt = Date.now();
-    renderSecurityCenter(d);
-  } catch (e) {
-    $("secIssues").innerHTML = `<div class="empty">安全中心加载失败：${esc(e.message)}</div>`;
-  } finally { secLoading = false; }
-}
-
-async function updateSecurityIncident(key, patch) {
-  const current = (secData?.incidents?.items || []).find(x => x.key === key) || {};
-  try {
-    await api(`/api/security/incidents/${encodeURIComponent(key)}`, "PATCH", {
-      status: patch.status ?? current.status ?? "open",
-      note: patch.note ?? current.note ?? "",
-      false_positive: patch.false_positive ?? current.false_positive ?? false,
-    });
-    toast("事件状态已保存", "刷新采集后仍会保留");
-    secLoadedAt = 0; await loadSecurity(true);
-  } catch (e) { toast("保存失败", e.message, true); }
-}
-
-async function doSecurityBan(ip) {
-  try {
-    const r = await api("/api/security/changes/ban", "POST", {
-      ip, duration:"4h", reason:"事件中心确认后临时封禁"});
-    toast(`已临时封禁 ${ip}`, `变更 ${r.change_id.slice(0,8)}，健康核查通过`);
-  } catch (e) { toast("安全变更失败", e.message, true); }
-  secBanConfirm = null; secLoadedAt = 0; await loadSecurity(true); await refresh();
-}
-
-async function doSecurityRollback(id) {
-  try {
-    await api(`/api/security/changes/${encodeURIComponent(id)}/rollback`, "POST");
-    toast("已回滚安全变更", "对应封禁已解除");
-  } catch (e) { toast("回滚失败", e.message, true); }
-  secRollbackConfirm = null; secLoadedAt = 0; await loadSecurity(true); await refresh();
-}
-
-async function showSecurityCti(ip) {
-  try {
-    const res = await fetch(`/api/security/cti/${encodeURIComponent(ip)}`), d = await res.json();
-    if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
-    if (!d.enabled) { toast("威胁情报未启用", d.message || "未配置 CTI key"); return; }
-    const x = d.data || {};
-    $("modal").innerHTML = `<div class="modal"><div class="modal-box">
-      <div class="modal-head"><h3>${esc(ip)} 威胁情报</h3><span class="sp"></span>
-        <button class="btn sm ghost" id="ctiClose">关闭</button></div>
-      <div class="grid cols2"><div class="card flat"><h2>结论</h2>
-        <div class="row"><span class="k">恶意度</span><span class="v">${esc(x.maliciousness || x.reputation || "—")}</span></div>
-        <div class="row"><span class="k">置信度</span><span class="v">${esc(x.confidence || "—")}</span></div>
-        <div class="row"><span class="k">分类</span><span class="v">${esc((x.behaviors || x.classifications || []).join?.("、") || "—")}</span></div>
-      </div><div class="card flat"><h2>原始情报</h2><pre class="logbox">${esc(JSON.stringify(x, null, 2))}</pre></div></div>
-    </div></div>`;
-    $("ctiClose").onclick = () => $("modal").innerHTML = "";
-  } catch (e) { toast("情报查询失败", e.message, true); }
-}
-
 /* ================= 调度 ================= */
 
 let activeTab = "overview", lastData = null, lastSections = null, sparkCache = {};
-// null = 本机；否则是 nodes 采集器里的节点名
-let activeNode = null;
+/* 当前查看的机器。"local" 是跑着面板的那一台，其余是节点名。
+   以前这里 null 表示本机，本机因此成了 if 的另一个分支，每个页签都要写两遍
+   （renderNodeOverview / renderOverview 那种）。现在本机只是 fleet 里 id 为
+   "local" 的一员，走同一条渲染路径 */
+let activeNode = "local";
+let fleetItems = [];       // /api/nodes 的一行摘要，节点切换器和 fleet 条都读它
+let nodeSnap = null;       // 当前机器的 NodeSnapshot
 // 站点名来自后端 config 的 site_name，用于头部与主机卡片标题。
 // 拿到之前先用中性占位，别写死任何一台机器的名字
 let siteName = "主机";
@@ -2629,60 +577,85 @@ document.querySelectorAll("nav button").forEach(b => {
       $(t).classList.toggle("hide", t !== activeTab));
     // 这几个是本机专属的数据源，节点视图下不拉——省一次请求，
     // 也避免拉回来的本机数据被误当成节点的
-    if (activeTab === "history" && !activeNode) { loadHistory(); loadAudit(); }
-    if (activeTab === "containers" && !activeNode) loadSnapshots();
+    // 历史曲线本机和节点都有；审计是面板自身的操作流水，只对本机有意义
+    if (activeTab === "history") { loadHistory(); if (isLocal()) loadAudit(); }
+    if (activeTab === "containers" && isLocal()) loadSnapshots();
     if (activeTab === "firewall") loadWhitelist();
     if (activeTab === "security") loadSecurity(true);
-    if (activeTab === "settings" && !activeNode) loadSettings();
+    if (activeTab === "settings" && isLocal()) loadSettings();
     refresh();
   };
 });
 
-/* 节点切换器。选中某台之后，各页签显示那台的数据；本机数据不掺进来，
-   宁可显示"该节点未采集此项"也不要让人误以为看到的是节点的 */
-function syncNodePicker(nodesSec) {
-  const items = nodesSec?.data?.items || [];
-  const sel = $("nodePick");
-  if (!items.length) { sel.classList.add("hide"); return; }
-  sel.classList.remove("hide");
-  const want = ["", ...items.map(n => n.name)].join("|");
-  // 只在节点集合变化时重建。每 5 秒重建一次会让下拉在展开时被抽掉
-  if (sel.dataset.sig !== want) {
-    sel.dataset.sig = want;
-    sel.innerHTML = `<option value="">本机（${esc(siteName)}）</option>` +
-      items.map(n => `<option value="${esc(n.name)}"${n.ok ? "" : " data-off=1"}>${
-        esc(n.name)}${n.ok ? "" : "（离线）"}</option>`).join("");
+const isLocal = () => activeNode === "local";
+const currentFleet = () => fleetItems.find(n => n.id === activeNode) || null;
+
+/* 节点切换器。选中哪台，各页签就显示哪台的数据；不掺别的机器的数据进来，
+   宁可显示"这台没有这个模块"也不要让人误以为看到的是它的。
+   本机在这个列表里是普通一项，不是固定在最前面的特例 */
+function syncNodePicker() {
+  const sel = $("nodePick"), tabs = $("nodeTabs");
+  // 只有一台（没配节点）时不显示切换器，单机部署看不到这个控件
+  if (fleetItems.length < 2) {
+    sel.classList.add("hide"); tabs.classList.add("hide");
+    return;
   }
-  if (sel.value !== (activeNode || "")) sel.value = activeNode || "";
+  tabs.classList.remove("hide");
+  sel.classList.remove("hide");
+  // 标签条：每台一个标签，带状态点。状态或选中项变了才重绘——
+  // 每 5 秒重绘会让鼠标悬停的高亮闪一下
+  const tsig = fleetItems.map(n => `${n.id}:${n.level}:${n.ok ? 1 : 0}`).join("|") +
+               "#" + activeNode;
+  if (tabs.dataset.sig !== tsig) {
+    tabs.dataset.sig = tsig;
+    tabs.innerHTML = fleetItems.map(n => `
+      <button class="ntab${n.id === activeNode ? " on" : ""} fleetPick"
+              data-node="${esc(n.id)}"
+              title="${esc(n.ok ? (n.issues || []).join("、") || "正常" : n.error || "离线")}">
+        <span class="dot ${n.ok ? n.level : "crit"}"></span>${esc(n.name)}
+      </button>`).join("");
+  }
+  const sig = fleetItems.map(n => `${n.id}:${n.ok ? 1 : 0}`).join("|");
+  // 只在机器集合或在线状态变化时重建。每 5 秒重建一次会让下拉在展开时被抽掉
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = fleetItems.map(n => `<option value="${esc(n.id)}">${
+      esc(n.name)}${n.role === "local" ? "（本机）" : ""}${n.ok ? "" : "（离线）"}</option>`).join("");
+  }
+  if (sel.value !== activeNode) sel.value = activeNode;
 }
 
 $("nodePick").onchange = e => {
-  activeNode = e.target.value || null;
-  document.body.classList.toggle("nodeview", !!activeNode);
-  // 切回本机时把那几个本机专属的数据源补拉回来
-  if (!activeNode) {
-    if (activeTab === "history") { loadHistory(); loadAudit(); }
-    if (activeTab === "containers") loadSnapshots();
-    if (activeTab === "settings") loadSettings();
-    if (activeTab === "security") loadSecurity(true);
-  }
-  refresh();
+  switchNode(e.target.value || "local");
 };
 
-/* 节点没采集的那些项，给一条说明而不是空白——空白让人以为是坏了 */
+function switchNode(id) {
+  if (id === activeNode) return;
+  activeNode = id;
+  nodeSnap = null;                 // 立刻作废，免得旧机器的数据闪一下
+  document.body.classList.toggle("nodeview", !isLocal());
+  // 这几个数据源只对本机有意义，切回来时补拉
+  if (activeTab === "history") { loadHistory(); if (isLocal()) loadAudit(); }
+  // 安全中心的按机器过滤在前端做，切换时直接用缓存重渲染，不必再请求一次
+  if (activeTab === "security" && secRaw) renderSecurityCenter();
+  if (isLocal()) {
+    if (activeTab === "containers") loadSnapshots();
+    if (activeTab === "settings") loadSettings();
+  }
+  refresh();
+}
+
+/* 页签整体不适用于某台机器时的说明。模块级的缺失由 moduleCard 统一处理，
+   这里只管"整个页签都不适用"这一种 */
 function notCollected(what, why) {
+  const name = currentFleet()?.name || activeNode;
   return `<div class="card full flat"><h2><span class="dot"></span>${esc(what)}
-      <span class="right">${esc(activeNode)}</span></h2>
+      <span class="right">${esc(name)}</span></h2>
     <div class="empty center" style="padding:30px 20px; line-height:1.7">
       ${why}<br>
       <span style="font-size:12px; color:var(--faint)">
-        切回「本机」可以看这台的完整数据</span>
+        切到「本机」可以看这台的完整数据</span>
     </div></div>`;
-}
-
-function currentNode() {
-  if (!activeNode) return null;
-  return (lastSections?.nodes?.data?.items || []).find(n => n.name === activeNode) || null;
 }
 
 $("banBtn").onclick = () => {
@@ -2795,17 +768,10 @@ $("secRefresh").onclick = () => { secLoadedAt = 0; loadSecurity(true); };
 // 列表里的按钮每次重绘都是新元素，统一用事件委托
 document.addEventListener("click", e => {
   const t = e.target;
-  const openSecurity = t.closest?.("[data-open-security]");
-  if (openSecurity) {
-    document.querySelector('nav button[data-tab="security"]')?.click();
-    return;
-  }
   // 节点行展开/收起。用 closest 是因为点到的多半是行内的 span 而不是行本身
-  const nodeRow = t.closest?.(".nodeRow");
-  if (nodeRow) {
-    const name = nodeRow.dataset.node;
-    nodeOpen = nodeOpen === name ? null : name;
-    if (lastSections && activeTab === "overview") renderOverview(lastSections);
+  const fleetRow = t.closest?.(".fleetPick");
+  if (fleetRow) {
+    switchNode(fleetRow.dataset.node);
     return;
   }
   if (t.dataset?.ban) { doBan(t.dataset.ban, $("banDur").value, "面板一键封禁"); return; }
@@ -2850,6 +816,12 @@ document.addEventListener("click", e => {
     return;
   }
   if (t.dataset?.mute) { doMute(t.dataset.mute, null); return; }
+  // 告警整行可点，但"忽略"按钮除外——那是行内的另一个动作
+  const jump = t.closest?.(".alertJump");
+  if (jump && !t.dataset?.mute) {
+    jumpToAlert(jump.dataset.tab, jump.dataset.mod);
+    return;
+  }
   if (t.dataset?.unmute) {
     api(`/api/alerts/mute/${encodeURIComponent(t.dataset.unmute)}`, "DELETE")
       .then(() => { toast("已恢复", "该告警会重新出现"); loadSettings(); refresh(); })
@@ -2909,12 +881,158 @@ async function loadSparks() {
   } catch { /* 历史不可用不影响主面板 */ }
 }
 
+/* ---------- fleet：全部机器排在一起 ----------
+   以前是每台节点一张进度条卡插在总览第 2 位，本机的负载则画在"主机"卡里——
+   同一个指标两个位置两种画法，机器多几台还会把本机指标挤下去大半屏。
+
+   改成一张横排卡：一台一行，列是统一指标，本机也在里面。多机场景下最常问的
+   是"哪台不对劲"，横着扫一眼比逐张翻卡片快，也不占地方。 */
+
+function fleetCell(pct, label) {
+  if (pct == null) return `<span class="fcell dim">—</span>`;
+  return `<span class="fcell" title="${esc(label || "")}">
+    <b class="${pctTone(pct)}">${pct}%</b>
+    <i class="fbar"><i class="${pctClass(pct)}" style="width:${Math.min(100, pct)}%"></i></i>
+  </span>`;
+}
+
+const pctTone = p => p >= 90 ? "crit" : p >= 75 ? "warn" : "";
+
+function renderFleetStrip() {
+  if (fleetItems.length < 2) return "";       // 单机部署不需要这张卡
+  const offline = fleetItems.filter(n => !n.ok).length;
+  const bad = fleetItems.filter(n => n.level === "crit").length;
+  const rows = fleetItems.map(n => {
+    const on = n.id === activeNode;
+    if (!n.ok) {
+      return `<div class="frow${on ? " on" : ""} fleetPick" data-node="${esc(n.id)}">
+        <span class="fname"><span class="dot crit"></span>${esc(n.name)}</span>
+        <span class="fdown">${esc(n.error || "连不上")}</span></div>`;
+    }
+    return `<div class="frow${on ? " on" : ""} fleetPick" data-node="${esc(n.id)}">
+      <span class="fname"><span class="dot ${n.level}"></span>${esc(n.name)}
+        ${n.role === "local" ? '<span class="tag">本机</span>' : ""}
+        ${n.issues.length ? `<span class="tag crit">${esc(n.issues[0])}</span>` : ""}</span>
+      ${fleetCell(n.load_percent, `${n.cores ?? "?"} 核`)}
+      ${fleetCell(n.memory_percent, "内存")}
+      ${fleetCell(n.disk_percent, n.disk_mount || "最满的盘")}
+      <span class="fmeta">${n.containers_running ?? "—"}/${n.containers_total ?? "—"} 容器</span>
+      <span class="fmeta">${n.ports_exposed ?? "—"} 端口</span>
+      <span class="fmeta">${n.guard_entries != null
+        ? n.guard_entries.toLocaleString() + " 规则" : "规则未采"}</span>
+      <span class="fmeta dim">${n.latency_ms != null ? n.latency_ms + "ms" : "本地"}</span>
+    </div>`;
+  }).join("");
+  const summary = offline ? `${offline} 台离线`
+    : bad ? `${bad} 台需要处理` : "全部正常";
+  return card(`全部机器 <span class="right">${fleetItems.length} 台 · ${summary}</span>`,
+    offline || bad ? "crit" : "ok", `
+    <div class="fhead">
+      <span class="fname">机器</span><span class="fcell">负载</span>
+      <span class="fcell">内存</span><span class="fcell">最满的盘</span>
+      <span class="fmeta">容器</span><span class="fmeta">端口</span>
+      <span class="fmeta">落地封禁</span><span class="fmeta">延迟</span>
+    </div>
+    ${rows}
+    <div class="note">点任意一行切到那台。指标口径全部一致，切过去后各页签显示的
+      就是那台的数据——采不到的项会明说"未启用"，不会拿本机数据顶替</div>`,
+    "full flat");
+}
+
+/* ---------- 快照拉取 ---------- */
+
+async function loadSnapshot(id) {
+  try {
+    const r = await fetch(`/api/nodes/${encodeURIComponent(id)}/snapshot`, {cache: "no-store"});
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+/* ---------- 总览页 ----------
+   三段：不随节点切换的集群级卡片、全部机器横排、当前这台的模块卡。
+   层级在结构上就分开了，不靠每张卡自己记得该不该跟着切 */
+
+function renderOverviewPage(s, snap) {
+  /* fleet 横排要占满宽度，所以渲染到瀑布流外面的独立容器。
+     放进 #overview 是错的：那里是 CSS columns，grid-column 在里面完全无效
+     （CSS 里那行 `#overview .card.span2{grid-column:auto}` 就是这个原因），
+     .card.full 拿不到整行，只能拿到一列 366px，而 fleet 内部是 8 列 grid、
+     最小要 678px，硬塞进去会溢出并把相邻卡片挤变形 */
+  const top = [renderFleetStrip()];
+  if (snap && !snap.node.ok) {
+    // 节点离线时总览页几乎只剩这一张卡，压成一列宽右边会空一大片
+    top.push(renderOfflineNode(snap));
+  } else if (snap) {
+    top.push(scriptVersionNotice(snap));
+  }
+  $("overviewTop").innerHTML = top.filter(Boolean).join("");
+
+  const parts = [];
+  // L0：CrowdSec 的决策是全集群的，跟看哪台无关，所以它不随切换变。
+  // 它和其余卡片等宽走瀑布流——内容只有三个数字加一段列表，拉成全宽会空一大片
+  parts.push(renderSecurity(s.crowdsec));
+  if (snap) {
+    parts.push(renderSnapshotOverview(snap));
+  } else {
+    parts.push(`<div class="card flat"><div class="empty center">读不到这台的状态</div></div>`);
+  }
+  // remote 是"探测别人家的机器"（NPU 那类），不属于被管理节点，只在本机视图显示
+  if (isLocal()) parts.push(renderRemote(s.remote));
+  $("overview").innerHTML = parts.join("");
+}
+
+/* ---------- 节点视图下的其他页签 ----------
+   conns / ports / containers 三个页签的本机渲染很丰富（GeoIP 归属、容器日志、
+   快照清理），节点采不到那些。这里用模块卡渲染到独立容器，缺的照样出占位卡，
+   不再是以前那种整页空白配一段散文。
+
+   页签级的深度统一（让本机也走这条路）排在后面做，见
+   private/多节点重构规划.md 阶段 A'。 */
+
+/* 每个页签在节点视图下画哪些模块。null = 整页不适用（不是缺数据，是这页
+   本来就跟节点无关）。集中登记在这里，refresh 只查表，不再一处一处写 if */
+const NODE_TAB_MODULES = {
+  conns:      ["connections"],
+  ports:      ["ports"],
+  containers: ["containers"],
+  settings:   null,
+  // history 不在这里：节点指标已经落进历史库了（key 带 node: 前缀），
+  // 这页在节点视图下走的是和本机相同的渲染，只是曲线分组少几组
+};
+
+const NODE_TAB_NOTICE = {
+  settings: ["设置",
+    "这里配的是<b>面板自身</b>的告警规则和推送，不分节点——" +
+    "各节点的告警本来就汇总到同一个 CrowdSec 中央，走同一套规则。"],
+};
+
+/* 只填内容，不管显隐 */
+function fillNodeNotice() {
+  const mods = NODE_TAB_MODULES[activeTab];
+  if (mods === null) {
+    const [what, why] = NODE_TAB_NOTICE[activeTab] || ["这个页签", "对节点不适用。"];
+    $("nodeNotice").innerHTML = notCollected(what, why);
+    return;
+  }
+  if (!nodeSnap) { $("nodeNotice").innerHTML = ""; return; }
+  $("nodeNotice").innerHTML = !nodeSnap.node.ok
+    ? renderOfflineNode(nodeSnap)
+    : mods.map(m => moduleCard(nodeSnap, m)).join("");
+}
+
 async function refresh() {
   try {
-    const res = await fetch("/api/summary", {cache: "no-store"});
+    // 两个请求并行。fleet 那个只是读内存缓存做投影，很便宜；分开发是为了
+    // 让"当前看哪台"和"全局告警"各走各的，切换节点不用等 summary
+    const [res, fleetRes] = await Promise.all([
+      fetch("/api/summary", {cache: "no-store"}),
+      fetch("/api/nodes", {cache: "no-store"}),
+    ]);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const body = await res.json();
     const s = body.sections || {};
+    if (fleetRes.ok) fleetItems = (await fleetRes.json()).items || [];
     lastSections = s;
     if (body.site_name && body.site_name !== siteName) {
       siteName = body.site_name;
@@ -2927,44 +1045,38 @@ async function refresh() {
     lastData = s.crowdsec?.data || null;
     renderAlertBar(body.alerts);
 
-    syncNodePicker(s.nodes);
-    const node = currentNode();
-    // 选中的节点掉线或被移除时自动退回本机，否则页面会僵在一个不存在的视图上
-    if (activeNode && !node) {
-      activeNode = null;
+    // 选中的机器不在列表里了（节点被移除），退回本机而不是僵在空视图上
+    if (fleetItems.length && !currentFleet()) {
+      activeNode = "local";
       document.body.classList.remove("nodeview");
-      toast("节点已不在列表中", "已切回本机视图");
+      toast("这台机器已不在列表中", "已切回本机");
     }
+    syncNodePicker();
+    nodeSnap = await loadSnapshot(activeNode);
+    const node = isLocal() ? null : currentFleet();
 
     if (activeTab === "overview") {
-      node ? renderNodeOverview(node) : renderOverview(s);
+      renderOverviewPage(s, nodeSnap);
     } else if (activeTab === "firewall") {
       renderFirewall(s.crowdsec, s.engine);
     } else if (activeTab === "security") {
       loadSecurity();
-    } else if (activeTab === "conns") {
-      node ? renderNodeConns(node) : renderConns(s.connections);
-    } else if (activeTab === "ports") {
-      node ? renderNodePorts(node) : renderPorts(s.ports);
-    } else if (activeTab === "containers") {
-      node ? renderNodeContainers(node) : renderContainerTab(s.containers);
+    } else if (activeTab === "conns" && isLocal()) {
+      renderConns(s.connections);
+    } else if (activeTab === "ports" && isLocal()) {
+      renderPorts(s.ports);
+    } else if (activeTab === "containers" && isLocal()) {
+      renderContainerTab(s.containers);
     }
-    // history 和 settings 在节点视图下不适用。用独立容器盖住而不是改它们的
-    // innerHTML——那两个页签里有静态结构，覆盖掉之后 loadHistory 就填不回去了
-    if (node && (activeTab === "history" || activeTab === "settings")) {
-      $(activeTab).classList.add("hide");
-      $("nodeNotice").classList.remove("hide");
-      $("nodeNotice").innerHTML = activeTab === "history"
-        ? notCollected("历史趋势",
-            "节点的历史数据存在它自己那台机器上，中央这边只聚合当前状态。" +
-            "跨节点存时序要另设计一套 schema，暂时没做。")
-        : notCollected("设置",
-            "这里配的是<b>面板自身</b>的告警规则和推送，不分节点——" +
-            "各节点的告警本来就汇总到同一个 CrowdSec 中央，走同一套规则。");
-    } else {
-      $("nodeNotice").classList.add("hide");
-      $(activeTab).classList.remove("hide");
-    }
+
+    /* 节点视图下，这几个页签的本机静态结构填不进节点数据，改用 nodeNotice
+       这个独立容器渲染。不直接改页签自己的 innerHTML——那会毁掉 #history 里的
+       静态骨架，切回本机时 loadHistory 就填不回去了。
+       显隐只在这一处决定，避免和上面的渲染互相覆盖 */
+    const useNotice = !isLocal() && activeTab in NODE_TAB_MODULES;
+    if (useNotice) fillNodeNotice();
+    $("nodeNotice").classList.toggle("hide", !useNotice);
+    $(activeTab).classList.toggle("hide", useNotice);
 
     const crit = body.alerts?.crit || 0, warn = body.alerts?.warn || 0;
     const navBtn = document.querySelector('nav button[data-tab="overview"]');

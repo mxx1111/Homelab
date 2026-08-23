@@ -401,7 +401,7 @@ clone starts up).
 | `crowdsec` | LAPI URL, database path, credentials file |
 | `firewall` | Write switch and token, see [Step 5](#step-5-set-up-login) |
 | `history` | SQLite history path and retention |
-| `notify` | Alert push (Server酱 / ntfy); credentials come from the environment, not from here |
+| `notify` | Server酱 push; the SendKey comes from the environment, not from here |
 | `alerts.rules` | Thresholds and switches — **also editable from the Settings tab** |
 | `ports` | Port labels, declared public ports, allowlist script path |
 | `disks.warn_hours` | Power-on hours before a drive is flagged, default 35000 (~4 years) |
@@ -543,24 +543,20 @@ that it never touches CrowdSec's configuration.
 
 ### Alerts and push
 
-Supports [Server酱](https://sct.ftqq.com/) and [ntfy](https://ntfy.sh/) (self-hosted or cloud).
-**Don't put credentials in `config.yaml`** — use `.env`:
+Uses [Server酱](https://sct.ftqq.com/) (a Chinese WeChat push service).
+**Don't put the SendKey in `config.yaml`** — use `.env`:
 
-**Using Server酱 (default):**
 ```bash
 cp .env.example .env
 echo "HOMELAB_SENDKEY=your-sendkey" >> .env
 docker compose up -d
 ```
-Keys starting with `sctp` use Server酱³, others use the Turbo endpoint; detected automatically.
 
-**Using ntfy:**
-Set `notify.provider: ntfy` in `config.yaml` and specify the topic URL (and optional token) in `.env`:
-```bash
-echo "HOMELAB_NTFY_URL=https://ntfy.sh/your-secret-topic" >> .env
-# echo "HOMELAB_NTFY_TOKEN=tk_optional_auth_token" >> .env
-docker compose up -d
-```
+Keys starting with `sctp` use Server酱³, others use the Turbo endpoint; detected
+automatically.
+
+> Want a different push provider (Telegram, Bark, Gotify, ntfy)? `backend/notify.py`
+> is about 60 lines with a single `send()` entry point — PRs very welcome.
 
 Three layers keep alerts from spamming you: the `sustain_seconds` duration gate,
 the `repeat_hours` reminder interval, and per-alert muting (timed or permanent,

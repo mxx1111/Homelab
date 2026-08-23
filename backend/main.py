@@ -21,8 +21,9 @@ from . import demo
 from .collectors.crowdsec import search_decisions
 from .config import CONFIG, CONFIG_PATH
 from .firewall import DURATIONS, FirewallError, LapiClient, Whitelist
-from .history import History
+from .history import History, node_metric
 from .notify import Notifier
+from . import nodeadapter, nodeschema
 from .security_center import SecurityCenter
 
 logging.basicConfig(level=logging.INFO,
@@ -266,21 +267,62 @@ def section(name: str):
     return JSONResponse(data)
 
 
+# ---------- 节点（fleet） ----------
+# 本机和被管理节点走同一份 NodeSnapshot 契约，本机的 id 固定是 "local"。
+# 本机不是特殊实体，只是恰好跑着面板的那一台——这样前端的节点切换、
+# fleet 排序、卡片渲染都只需要写一遍。契约见 backend/nodeschema.py
+
+@app.get("/api/nodes")
+def nodes_list():
+    """全部机器的一行摘要，本机在内。fleet 视图和节点切换器读这个"""
+    snaps = nodeadapter.fleet(store.snapshot()["sections"], CONFIG,
+                              alert_engine.site_name)
+    return JSONResponse({"items": [nodeadapter.summarize(s) for s in snaps],
+                         "generated_at": time.time()})
+
+
+@app.get("/api/nodes/{node_id}/snapshot")
+def node_snapshot(node_id: str):
+    """单台机器的完整 NodeSnapshot。各页签在节点视图下读这个。
+
+    模块顺序、中文名和"为什么没有这项"的提示一并下发——这些是契约的一部分，
+    让前端各写一份就会和后端的实际能力慢慢漂移。
+    """
+    sections = store.snapshot()["sections"]
+    for snap in nodeadapter.fleet(sections, CONFIG, alert_engine.site_name):
+        if snap["node"]["id"] != node_id:
+            continue
+        snap["order"] = list(nodeschema.MODULES)
+        snap["expected_script_version"] = nodeschema.EXPECTED_SCRIPT_VERSION
+        snap["module_names"] = nodeschema.MODULE_NAMES
+        snap["hints"] = {m: nodeschema.hint(m)
+                         for m, level in snap["capabilities"].items()
+                         if level == nodeschema.UNSUPPORTED}
+        return JSONResponse(snap)
+    raise HTTPException(status_code=404, detail=f"未知节点: {node_id}")
+
+
 # ---------- 历史 ----------
 
 @app.get("/api/history/series")
 def history_series(metric: str = Query(...), hours: int = Query(24, ge=1, le=2160),
-                   points: int = Query(120, ge=10, le=600)):
-    return {"metric": metric, "hours": hours,
-            "points": history.series(metric, hours, points)}
+                   points: int = Query(120, ge=10, le=600),
+                   node: Optional[str] = None):
+    """node 省略或传 local 就是本机。节点指标在库里带 "node:<名字>:" 前缀，
+    拼 key 的规则放在后端，前端不用知道存储格式"""
+    key = node_metric(node, metric)
+    return {"metric": metric, "node": node or "local", "key": key, "hours": hours,
+            "points": history.series(key, hours, points)}
 
 @app.get("/api/history/multi")
 def history_multi(metrics: str = Query(...), hours: int = Query(24, ge=1, le=2160),
-                  points: int = Query(120, ge=10, le=600)):
+                  points: int = Query(120, ge=10, le=600),
+                  node: Optional[str] = None):
     """一次取多条曲线，前端画一屏图只发一个请求"""
     names = [m.strip() for m in metrics.split(",") if m.strip()][:12]
-    return {"hours": hours,
-            "series": {m: history.series(m, hours, points) for m in names}}
+    return {"hours": hours, "node": node or "local",
+            "series": {m: history.series(node_metric(node, m), hours, points)
+                       for m in names}}
 
 
 @app.get("/api/history/metrics")

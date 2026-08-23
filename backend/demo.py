@@ -504,6 +504,57 @@ def nodes(cfg):
             "services": {"ssh": "active", "docker": "active",
                          "crowdsec": "active",
                          "crowdsec-firewall-bouncer": "active"},
+            # 采集脚本 v5 的几项。第二台故意留在 v4，好让演示站能看到
+            # "节点脚本需要更新"那条提示长什么样——这是真实部署里必然会遇到的
+            # 中间状态（升级了面板还没来得及更新每台节点的脚本）
+            "script_version": 5 if i == 0 else 4,
+            "network": {"interface": "eth0",
+                        "rx_bytes_per_sec": int(_wave(240, 60_000, 900_000, phase)),
+                        "tx_bytes_per_sec": int(_wave(240, 20_000, 300_000, phase + 1.3)),
+                        "rx_total": 880_000_000_000 + i * 210_000_000_000,
+                        "tx_total": 140_000_000_000 + i * 39_000_000_000,
+                        "window_seconds": 60, "public_ip": None} if i == 0 else None,
+            "connections": {
+                "items": [{"ip": ip, "count": c, "ports": [pt], "port": pt,
+                           "private": False, "inbound": True,
+                           "country": cc, "as_name": asn}
+                          for ip, c, pt, cc, asn in [
+                              ("203.0.113.9", 6, 443, "SG", "DigitalOcean"),
+                              ("198.51.100.7", 3, 443, "DE", "Hetzner"),
+                              ("192.0.2.44", 1, 22, "CN", "China Telecom")]],
+                "total": 10, "peers": 3, "external": 3, "inbound": 10,
+                "outbound": None, "truncated": False, "geo": True,
+                "by_port": [{"port": 443, "conns": 9, "peers": 2, "service": None},
+                            {"port": 22, "conns": 1, "peers": 1, "service": None}],
+            } if i == 0 else None,
+            "certs": {"items": [
+                {"name": "node.example.com", "host": "node.example.com", "ok": True,
+                 "days_left": 12, "not_after": int(time.time()) + 86400 * 12,
+                 "level": "warn"},
+                {"name": "api.example.com", "host": "api.example.com", "ok": True,
+                 "days_left": 74, "not_after": int(time.time()) + 86400 * 74,
+                 "level": "ok"}], "level": "warn"} if i == 0 else None,
+            "smart": {"items": [
+                {"device": "vda", "health": "PASSED", "hours": 26000, "years": 3.0,
+                 "temp_c": 38, "model": "QEMU HARDDISK",
+                 "attrs": {"Reallocated_Sector_Ct": 0, "Current_Pending_Sector": 0},
+                 "issues": [], "level": "ok"}],
+                "total": 1, "failing": 0, "aging": 0, "unavailable": [],
+                "raids": {}, "no_redundancy": [], "warn_hours": 35000}
+                if i == 0 else None,
+            "engine": {
+                "ok": True,
+                "sources": [{"path": "/var/log/nginx/access.log", "name": "access.log",
+                             "kind": "file", "lines": 41200, "parse_ok": 41200,
+                             "parse_ko": 0, "parse_rate": 100.0, "wasted": False},
+                            {"path": "/var/log/auth.log", "name": "auth.log",
+                             "kind": "file", "lines": 830, "parse_ok": 74,
+                             "parse_ko": 756, "parse_rate": 8.9, "wasted": False}],
+                "effective_sources": 2, "wasted_sources": [],
+                "scenarios": [{"name": "crowdsecurity/ssh-bf", "poured": 61,
+                               "overflowed": 4}],
+                "overflowed_total": 4, "parse_rate": 98.0, "active_buckets": 2,
+            } if i == 0 else None,
         })
     return {"ok": True, "items": items, "configured": len(items),
             "online": len(items), "offline": 0}

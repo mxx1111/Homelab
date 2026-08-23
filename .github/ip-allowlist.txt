@@ -26,3 +26,6 @@ scripts/demo-autoupdate.sh: 172.31.240.2
 scripts/demo-isolate.sh: 172.31.240.0/28
 scripts/tailscale-cgnat-fix.sh: *
 scripts/watchdog.env.example: *
+
+# 前端渲染测试里的假 IP，只用来验证告警锚点映射
+tests/nodeview.test.mjs: 1.2.3.4

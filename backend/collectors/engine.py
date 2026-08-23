@@ -56,8 +56,20 @@ def collect(cfg):
         return {"ok": False, "error": f"连不上 metrics 端点 {url}: {exc}"}
     except httpx.HTTPStatusError as exc:
         return {"ok": False, "error": f"metrics 返回 HTTP {exc.response.status_code}"}
+    return build(resp.text)
 
-    m = _parse(resp.text)
+
+def build(text):
+    """从 prometheus 文本算出引擎指标。
+
+    拉取和解析分开，是为了让节点侧能共用这段。CrowdSec agent 的 6060 默认只听
+    127.0.0.1，面板连不上，但节点采集脚本就跑在那台机器上，够得着——它把
+    metrics 抓下来经 SSH 带回，到这里走的是和本机完全相同的解析逻辑。
+
+    共用不是为了省几十行，是为了口径一致：解析率、白读源、确认攻击这些数
+    只要有两份实现，迟早会在某次改动后对不上，而对不上时没人会发现。
+    """
+    m = _parse(text)
 
     # 解析成功率必须按源分开算。全局算出来是 1.7%，看着像坏了，
     # 其实是 syslog 那 4 万行系统日志本来就没有对应解析器；

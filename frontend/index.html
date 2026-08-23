@@ -4,8 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Homelab</title>
+<!-- Leaflet 随仓库分发，不走 CDN。面板常常是外网出问题时才去看的东西，
+     从 CDN 拉地图组件等于让它在最需要的时候最脆弱。来源与校验见 frontend/vendor/README.md -->
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v=1.9.4">
-<link rel="stylesheet" href="/static/app.css?v=0.5.0-6">
+<link rel="stylesheet" href="/static/app.css?v=0.5.1-0">
 </head>
 <body>
 <div class="wrap">
@@ -16,15 +18,18 @@
     </div>
     <nav>
       <button class="on" data-tab="overview">总览</button>
-      <button data-tab="security">安全中心</button>
       <button data-tab="firewall">防火墙</button>
+      <button data-tab="security">安全中心</button>
       <button data-tab="conns">连接</button>
       <button data-tab="ports">端口</button>
       <button data-tab="history">历史</button>
       <button data-tab="containers">容器</button>
       <button data-tab="settings">设置</button>
     </nav>
-    <!-- 节点切换。只在配了节点时出现，单机部署看不到这个控件 -->
+    <!-- 机器切换。只在配了节点时出现，单机部署看不到这个控件。
+         标签条而不是下拉：下拉收起时看不到各台的健康，而多机场景下最常问的
+         就是"哪台不对劲"。窄屏放不下标签条时回退成 select -->
+    <div id="nodeTabs" class="nodetabs hide" role="group" aria-label="切换查看的机器"></div>
     <select id="nodePick" class="nodepick hide" title="切换查看的机器"></select>
     <div class="status"><span class="pulse" id="pulse"></span><span id="updated">连接中…</span></div>
   </header>
@@ -39,37 +44,39 @@
 
   <div id="alertbar" class="alertbar"></div>
 
-  <!-- 总览 -->
-  <div id="overview">
-    <section id="overviewSecurity" class="overview-security">
-      <div class="overview-security-head">
-        <div>
-          <div class="eyebrow"><span class="dot info"></span>安全态势</div>
-          <h2 id="overviewSecurityTitle">正在核查防护状态</h2>
-          <p id="overviewSecurityNote">汇总 CrowdSec、节点防护与公网资产</p>
-        </div>
-        <button class="btn ghost" data-open-security>进入安全中心</button>
-      </div>
-      <div class="overview-security-body">
-        <div>
-          <div class="security-kpis" id="overviewSecurityKpis"></div>
-          <div class="overview-attack-list" id="overviewAttackList"></div>
-        </div>
-        <div class="overview-map-wrap">
-          <div class="overview-map" id="overviewMiniMap"></div>
-          <div class="overview-map-caption">24 小时攻击来源概览 · 详细地图可在安全中心查看</div>
-        </div>
-      </div>
-    </section>
-    <div id="overviewCards" class="overview-cards"></div>
-  </div>
+  <!-- 总览。分两层：
+       #overviewTop 是普通块级容器，装需要横跨整个宽度的东西（fleet 横排）；
+       #overview 是 CSS columns 瀑布流，装等宽的卡片。
+       两者必须分开——columns 里 grid-column 完全无效，.card.full 在里面
+       不会横跨，只会是一列宽，而 fleet 那 8 列 grid 最小要 678px，
+       塞进 366px 的列里就把布局撑乱了 -->
+  <div id="overviewTop"></div>
+  <div id="overview" class="grid"></div>
 
-  <!-- 防火墙 -->
+  <!-- 防火墙。卡片顺序按"打开这页最想知道什么"排：先概况和攻击来源，
+       再看各节点防护在不在，最后才是明细与操作。
+       封禁表单从页首挪进了封禁列表卡的头部——要封的那个 IP 多半是从攻击 TOP
+       或下面这张表里看到的，在有上下文的地方操作，比滚回页首手敲一遍快 -->
   <div id="firewall" class="hide">
+    <!-- 第一屏两张卡单独成行并占满宽度。放在下面的 .grid 里不行：
+         那个 grid 是 auto-fill，宽屏上会排出四五列，而这两张只占 1+2 列，
+         右边会空一大片。这里固定 1:2 两栏，概况窄、攻击来源宽 -->
+    <div class="fwhead">
+      <div class="card" id="fwStat"></div>
+      <div class="card" id="fwTop"></div>
+    </div>
+
     <div class="grid">
-      <!-- 操作区静态渲染，不参与轮询重绘，否则输入到一半会被清掉 -->
+      <div class="card full flat" id="fwNodes"></div>
+
+      <div class="card span2" id="fwGeo"></div>
+      <div class="card" id="fwAsn"></div>
+      <div class="card span2" id="fwSources"></div>
+      <div class="card" id="fwScenarios"></div>
+
+      <!-- 表单和筛选区静态渲染，不参与轮询重绘，否则输入到一半会被清掉 -->
       <div class="card full flat">
-        <h2><span class="dot info"></span>封禁操作</h2>
+        <h2><span class="dot"></span>封禁列表</h2>
         <div id="fwOff" class="callout hide"></div>
         <div class="form">
           <input class="ip" id="banIp" placeholder="IP 或网段，如 1.2.3.4 / 1.2.3.0/24"
@@ -84,31 +91,7 @@
           <button class="btn ghost" id="tokenSave">记住</button>
         </div>
         <div class="note" id="fwNote"></div>
-      </div>
-
-      <div class="card full flat" id="fwNodes"></div>
-
-      <div class="card span2" id="fwTop"></div>
-      <div class="card" id="fwStat"></div>
-      <div class="card span2" id="fwGeo"></div>
-      <div class="card" id="fwAsn"></div>
-      <div class="card span2" id="fwSources"></div>
-      <div class="card" id="fwScenarios"></div>
-
-      <div class="card full flat">
-        <h2><span class="dot ok"></span>白名单
-          <span class="right">命中即自动解封，不改 CrowdSec 配置</span></h2>
-        <div class="form">
-          <input class="ip" id="wlIp" placeholder="IP 或网段，如 1.2.3.4 / 1.2.3.0/24"
-                 autocomplete="off" spellcheck="false">
-          <input class="why" id="wlNote" placeholder="备注（如：公司出口 IP）" autocomplete="off">
-          <button class="btn ghost" id="wlBtn">加入白名单</button>
-        </div>
-        <div id="wlList" style="margin-top:12px"></div>
-      </div>
-
-      <div class="card full flat">
-        <h2><span class="dot"></span>封禁列表</h2>
+        <i class="rule" style="margin:16px 0 14px"></i>
         <div class="filters">
           <input id="fwSearch" placeholder="搜索 IP、场景、AS…" autocomplete="off">
           <button class="chip on" data-kind="all">全部</button>
@@ -117,6 +100,18 @@
           <button class="chip" data-kind="community">社区黑名单</button>
         </div>
         <div class="scroll" id="fwList"></div>
+      </div>
+
+      <div class="card full flat">
+        <h2><span class="dot info"></span>白名单
+          <span class="right">命中即自动解封，不改 CrowdSec 配置</span></h2>
+        <div class="form">
+          <input class="ip" id="wlIp" placeholder="IP 或网段，如 1.2.3.4 / 1.2.3.0/24"
+                 autocomplete="off" spellcheck="false">
+          <input class="why" id="wlNote" placeholder="备注（如：公司出口 IP）" autocomplete="off">
+          <button class="btn ghost" id="wlBtn">加入白名单</button>
+        </div>
+        <div id="wlList" style="margin-top:12px"></div>
       </div>
     </div>
   </div>
@@ -140,7 +135,7 @@
       <div class="card flat" id="secAppsec"></div>
     </div>
     <div class="section"><h3>攻击态势</h3><i class="rule"></i>
-      <span class="meta">可缩放、拖动，不上传攻击 IP</span></div>
+      <span class="meta">攻击 IP 只在本页面叠加；底图瓦片要出网，可在配置里关掉</span></div>
     <div class="card flat secmap-card">
       <h2><span class="dot info"></span>攻击来源与当前封禁
         <span class="right" id="secMapMeta"></span></h2>
@@ -221,6 +216,9 @@
       <span class="meta" id="histSpan"></span></div>
     <div class="grid cols4" id="histCharts"></div>
 
+    <!-- 事件时间线、操作审计、容量预测、采样健康都是面板自身的东西，
+         不随查看哪台机器变。节点视图下整块收起来，免得让人以为看的是那台的 -->
+    <div data-local-only>
     <div class="section"><h3>记录</h3><i class="rule"></i></div>
     <div class="grid cols2">
       <div class="card flat">
@@ -244,6 +242,7 @@
       <div class="card flat" id="auditStat"></div>
       <div class="card flat" id="banStat"></div>
       <div class="card flat" id="histNote"></div>
+    </div>
     </div>
   </div>
 
@@ -314,6 +313,11 @@
 </div>
 
 <script src="/static/vendor/leaflet/leaflet.js?v=1.9.4"></script>
-<script src="/static/app.js?v=0.5.0-6"></script>
+<!-- 顺序有约束：前三个只有函数与常量声明，app.js 里是调度和全部顶层
+     立即执行的语句，必须最后。理由见各文件头部注释 -->
+<script src="/static/app-core.js?v=0.5.1-0"></script>
+<script src="/static/app-nodes.js?v=0.5.1-0"></script>
+<script src="/static/app-security.js?v=0.5.1-0"></script>
+<script src="/static/app.js?v=0.5.1-0"></script>
 </body>
 </html>

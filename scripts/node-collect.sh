@@ -27,7 +27,7 @@ run() { timeout "${1}" "${@:2}" 2>/dev/null; }
 echo "###META"
 echo "hostname=$(hostname)"
 echo "collected_at=$(date +%s)"
-echo "script_version=4"
+echo "script_version=5"
 
 echo "###HOST"
 run 2 cat /proc/loadavg
@@ -151,6 +151,103 @@ print(f"allow_deny={'true' if enabled.intersection({'ipWhite','ipBlack','urlWhit
 PY
 else
   echo "available=false"
+fi
+
+echo "###NETWORK"
+# 速率要两次采样求差值。面板每轮都是新的 SSH 连接，没法跨轮保存状态，
+# 所以上一次的计数存在节点侧，差值也在节点侧算完再报。
+# /run 是 tmpfs，重启自动清空，正合适——重启后第一轮没有速率是对的，
+# 那时的计数差跨越了关机时间，算出来是个假数字
+net_state=/run/homelab-node-net
+[ -d /run ] && [ -w /run ] || net_state=/tmp/homelab-node-net
+# 挑累计流量最大的物理网卡。虚拟网卡（docker/veth/tailscale）的流量是转发
+# 产生的，报出去会让人以为这台机器在对外跑大流量
+read -r cur_sum cur_rx cur_tx cur_if <<EOF
+$(awk -F: 'NR>2 {
+    name=$1; gsub(/[ \t]/, "", name)
+    if (name ~ /^(lo|docker|br-|veth|tailscale|virbr|vmbr|cni|flannel|kube|dummy)/) next
+    split($2, f, " ")
+    if (f[1]+f[9] > 0) print f[1]+f[9], f[1], f[9], name
+  }' /proc/net/dev 2>/dev/null | sort -rn | head -1)
+EOF
+if [ -n "${cur_if:-}" ]; then
+  now_ts=$(date +%s)
+  echo "interface=$cur_if"
+  echo "rx_total=$cur_rx"
+  echo "tx_total=$cur_tx"
+  if [ -r "$net_state" ]; then
+    read -r p_ts p_rx p_tx p_if < "$net_state" 2>/dev/null || true
+    # 换了网卡就不能相减——两块卡的计数器毫无关系，相减出来是垃圾。
+    # 计数器回绕（32 位机器或网卡重置）会得到负数，同样丢掉这一轮
+    if [ "${p_if:-}" = "$cur_if" ] && [ "${p_ts:-0}" -lt "$now_ts" ]; then
+      d=$((now_ts - p_ts))
+      drx=$((cur_rx - p_rx)); dtx=$((cur_tx - p_tx))
+      if [ "$drx" -ge 0 ] && [ "$dtx" -ge 0 ] && [ "$d" -gt 0 ]; then
+        echo "rx_bytes_per_sec=$((drx / d))"
+        echo "tx_bytes_per_sec=$((dtx / d))"
+        echo "window_seconds=$d"
+      fi
+    fi
+  fi
+  printf '%s %s %s %s\n' "$now_ts" "$cur_rx" "$cur_tx" "$cur_if" > "$net_state" 2>/dev/null || true
+fi
+
+echo "###CONNS"
+# 只报已建立的 TCP。IP 原样传给面板，GeoIP 归属在面板侧查——节点上装 GeoIP 库
+# 等于每台都要维护一份几十 MB 的数据文件，而面板本来就有
+run 6 ss -tnH state established
+
+echo "###CERTS"
+# 扫本地证书文件读到期时间，不做 TLS 探测。探测要出网，在节点上发起既慢又可能
+# 被防火墙挡；而且面板真正关心的是"这台机器上放着的证书还有几天过期"
+if command -v openssl >/dev/null 2>&1; then
+  for d in /etc/letsencrypt/live/*/ /opt/1panel/data/ssl/*/ /etc/ssl/homelab/*/; do
+    [ -d "$d" ] || continue
+    for f in "${d}fullchain.pem" "${d}cert.pem" "${d}fullchain.crt" "${d}cert.crt"; do
+      [ -r "$f" ] || continue
+      end=$(run 4 openssl x509 -enddate -noout -in "$f" 2>/dev/null | cut -d= -f2-)
+      [ -n "$end" ] || continue
+      epoch=$(date -d "$end" +%s 2>/dev/null) || epoch=""
+      # 证书里的 CN 比目录名可靠：目录可能是手工建的，CN 是签发时写进去的
+      cn=$(run 4 openssl x509 -subject -noout -in "$f" 2>/dev/null |
+           sed -n 's/.*CN[ ]*=[ ]*\([^,/]*\).*/\1/p' | head -1)
+      name=${cn:-$(basename "$d")}
+      [ -n "$epoch" ] && echo "$name|$epoch"
+      break        # 一个目录只报一张，fullchain 和 cert 是同一张证书
+    done
+  done
+fi
+
+echo "###SMART"
+# 只读健康状态，不跑自检——smartctl -t 会占用磁盘几分钟，不该由监控触发
+if command -v smartctl >/dev/null 2>&1 && command -v lsblk >/dev/null 2>&1; then
+  for dev in $(run 4 lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+    out=$(run 12 smartctl -H -A -i "/dev/$dev" 2>/dev/null) || continue
+    [ -n "$out" ] || continue
+    health=$(printf '%s' "$out" | grep -iE "SMART overall-health|SMART Health Status" |
+             sed 's/.*: *//' | head -1)
+    model=$(printf '%s' "$out" | grep -i "^Device Model\|^Model Number" |
+            sed 's/.*: *//' | head -1)
+    # SATA 盘看属性表第 10 列 RAW_VALUE，NVMe 是 "Power On Hours: 1,234" 这种格式
+    hours=$(printf '%s' "$out" | awk '/Power_On_Hours/ {print $10; exit}')
+    [ -n "$hours" ] || hours=$(printf '%s' "$out" |
+      awk -F: '/Power On Hours/ {gsub(/[ ,]/,"",$2); print $2; exit}')
+    realloc=$(printf '%s' "$out" | awk '/Reallocated_Sector_Ct/ {print $10; exit}')
+    pending=$(printf '%s' "$out" | awk '/Current_Pending_Sector/ {print $10; exit}')
+    temp=$(printf '%s' "$out" | awk '/Temperature_Celsius|Temperature:/ {print $10; exit}')
+    echo "$dev|${health:-unknown}|${hours:-}|${realloc:-}|${pending:-}|${temp:-}|${model:-}"
+  done
+fi
+
+echo "###ENGINE"
+# CrowdSec agent 的 prometheus 端点默认只监听 127.0.0.1:6060——从面板那边连不上，
+# 但这个脚本就跑在节点本地，正好够得着。
+# 只取需要的几个指标：全量输出有几百 KB，每 60 秒经 SSH 传一次不值当。
+# 格式是 prometheus 文本，面板侧直接复用 collectors/engine.py 已有的解析器
+if command -v curl >/dev/null 2>&1; then
+  run 6 curl -sf --max-time 5 http://127.0.0.1:6060/metrics 2>/dev/null |
+    grep -E '^cs_(filesource_hits_total|parser_hits_ok_total|parser_hits_ko_total|bucket_poured_total|bucket_overflowed_total|buckets|alerts)' |
+    head -400
 fi
 
 echo "###SERVICES"

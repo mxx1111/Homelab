@@ -14,7 +14,9 @@
 可以一键封禁 IP、重启容器、按趋势预测磁盘写满时间，异常时主动推到手机。
 也能[管理多台机器](#管理多台机器)：在一处封禁，全部节点同时生效。
 
-前端零构建、零依赖，图表是手写 SVG，整个前端就三个文件。
+前端零构建、无 npm 依赖，图表是手写 SVG，一个 HTML、一份 CSS、四个 JS。
+攻击态势地图用了 Leaflet，随仓库分发不走 CDN——面板常常是外网出问题时才去看的
+东西，从 CDN 拉组件等于让它在最需要的时候最脆弱。
 
 **在线体验 → <https://homelab.88688.team>**（数据全部仿真，可随意点击操作）
 
@@ -377,7 +379,7 @@ docker compose restart
 | `crowdsec` | LAPI 地址、数据库路径、凭据文件 |
 | `firewall` | 写操作开关与令牌，见[第五步](#第五步打开写操作) |
 | `history` | SQLite 历史库路径与保留天数 |
-| `notify` | 告警推送 (Server 酱 / ntfy)，凭据走环境变量不写这里 |
+| `notify` | Server 酱推送，SendKey 走环境变量不写这里 |
 | `alerts.rules` | 各类告警的阈值与开关，**也可以在面板「设置」页改** |
 | `ports` | 端口标签、公网端口声明、放行脚本路径 |
 | `disks.warn_hours` | 硬盘通电时长告警阈值，默认 35000 小时（约 4 年） |
@@ -512,9 +514,8 @@ CrowdSec 的任何配置文件。
 - **事件中心**：按攻击源跨机器聚合 CrowdSec 告警，保存调查中、已处理、误报
   与备注。可选配置 `HOMELAB_CROWDSEC_CTI_KEY` 后按需查询 CrowdSec CTI，结果
   缓存在本地 SQLite；没配 key 时不访问外网
-- **攻击态势**：使用随项目一起部署的开源 [Leaflet](https://leafletjs.com/)
-  （BSD-2-Clause）与 Natural Earth 本地简图，可缩放、拖动并切换世界/中国
-  视图，不依赖 VPN、地图 Key 或第三方底图服务。
+- **攻击态势**：使用开源 [Leaflet](https://leafletjs.com/)（BSD-2-Clause）
+  交互地图，可缩放、拖动并切换世界/中国视图。
   世界视图按国家聚合；中国视图使用 CrowdSec 本地 GeoLite2-City 数据库读取
   中文省市和经纬度，按 0.5° 网格聚合中国大陆及港澳台来源。攻击 IP 和事件数据只在浏览器本地
   叠加，不会传给底图服务；普通连接也不会被算作攻击
@@ -529,32 +530,23 @@ CrowdSec 的任何配置文件。
 `security_center.crowdsec_appsec.enabled` 默认关闭，保留适配接口用于以后单独的
 观察模式验证，避免双 WAF 带来的延迟和误报。
 
-地图默认直接加载 `/static/maps/` 下的 Natural Earth 世界边界、中国省级边界和
-本地中文标签；即使完全断开地图外网，攻击点和地理背景仍然可见。需要街道级细节
-时，可以显式打开 `security_center.map.external_tiles`，再配置自建或已授权的 XYZ
-瓦片与对应 `attribution`；瓦片连续失败时会自动保留本地简图。高德/百度使用不同
-坐标系且通常需要平台 Key，不能直接拿 CrowdSec 的 WGS84 经纬度硬套，也不要使用
-未授权的内部瓦片地址。
+地图默认使用 OpenStreetMap 标准瓦片，并在地图右下角保留署名。低流量家庭面板
+可以直接使用；公开或高流量部署应在 `security_center.map.tile_url` 中换成自建或
+已授权的 XYZ 瓦片服务，同时设置对应 `attribution`。高德/百度使用不同坐标系且
+通常需要平台 Key，不能直接拿 CrowdSec 的 WGS84 经纬度硬套。
 
 ### 告警与推送
 
-支持 [Server 酱](https://sct.ftqq.com/) 与 [ntfy](https://ntfy.sh/)（支持自建与云端）。敏感凭据 **不要写进 config.yaml**，放 `.env`：
+走 [Server 酱](https://sct.ftqq.com/)。SendKey **不要写进 config.yaml**，
+放 `.env`：
 
-**使用 Server 酱 (默认)：**
 ```bash
 cp .env.example .env
 echo "HOMELAB_SENDKEY=你的SendKey" >> .env
 docker compose up -d
 ```
-`sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。
 
-**使用 ntfy：**
-在 `config.yaml` 中配置 `notify.provider: ntfy`，并在 `.env` 中设置 topic 与可选 token：
-```bash
-echo "HOMELAB_NTFY_URL=https://ntfy.sh/your-secret-topic" >> .env
-# echo "HOMELAB_NTFY_TOKEN=tk_optional_auth_token" >> .env
-docker compose up -d
-```
+`sctp` 开头的走 Server酱³，其余走 Turbo 版，代码自动识别。
 
 告警有三层防刷屏：`sustain_seconds` 持续时间门槛、`repeat_hours` 重复提醒
 间隔、以及单条告警的「忽略」（可设时长或永久，在设置页管理）。
@@ -907,7 +899,15 @@ backend/
 frontend/
   index.html         页面骨架
   app.css            样式
-  app.js             渲染与交互（零依赖）
+  app-core.js        工具、格式化、SVG 图表、请求与写操作、登录
+  app-nodes.js       机器视图：总览卡片、节点视图、fleet 横排
+  app-security.js    防护线：告警条、防火墙、白名单、安全中心
+  app.js             其余页签与调度（必须最后加载）
+  vendor/leaflet/    攻击态势地图，随仓库分发，可在配置里整个关掉
+tests/
+  nodeview.test.mjs  节点视图渲染回归
+  split.test.mjs     前端拆分后的加载顺序约束
+                     跑法见 tests/README.md
 scripts/
   watchdog.sh        外部看门狗
   node-collect.sh    装在被管理节点上的采集脚本

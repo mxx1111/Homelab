@@ -120,6 +120,12 @@ class History:
         self._last_vacuum = 0.0
         self._ready = False
 
+    @property
+    def ready(self):
+        """库是否真的可写。enabled 只表示配置里开了，start() 失败时它才转 False；
+        调用方要判断"现在能不能落盘"应该看这个"""
+        return self._ready
+
     # ---------- 生命周期 ----------
 
     def start(self):
@@ -653,4 +659,58 @@ def _extract(sections):
     if ctr.get("running") is not None:
         out.append(("containers_running", ctr["running"]))
 
+    out.extend(_extract_nodes(sections))
+    return out
+
+
+# 节点指标带 "node:<名字>:" 前缀，本机不带。这样 metrics 表一列不用加，
+# series() 和索引一行不用改，老数据天然兼容，metric_names() 还能按前缀天然分组。
+#
+# 另一条路是给表加一列 node 并把索引改成 (node, metric, ts)。那样做只在需要
+# 跨节点聚合查询时才划算（"三台 CPU 求和"），而那个需求现在不存在——
+# 多机场景真正要回答的是"哪台不对劲"，那是逐台看曲线，不是求和。
+NODE_PREFIX = "node:"
+
+
+def node_metric(node_id, metric):
+    """本机不加前缀，保持和历史数据的连续性——加了就等于把之前的曲线断掉"""
+    return metric if node_id in (None, "", "local") else f"{NODE_PREFIX}{node_id}:{metric}"
+
+
+def _extract_nodes(sections):
+    """被管理节点的指标。
+
+    采样率跟着 nodes 采集器走（默认 60 秒），比本机稀，但画趋势够用。
+    只落最能说明问题的几条：负载、内存、最满的盘、容器数、落地封禁数。
+    全量落库会让 metrics 表膨胀好几倍，而多出来的那些指标平时没人看。
+    """
+    out = []
+    nodes = (sections.get("nodes") or {}).get("data") or {}
+    for node in nodes.get("items") or []:
+        name = node.get("name")
+        if not name or not node.get("ok"):
+            continue
+        p = lambda m: f"{NODE_PREFIX}{name}:{m}"          # noqa: E731
+        if node.get("load_percent") is not None:
+            out.append((p("load_percent"), node["load_percent"]))
+        mem = node.get("memory") or {}
+        if mem.get("percent") is not None:
+            out.append((p("mem"), mem["percent"]))
+        disks = node.get("disks") or []
+        if disks and disks[0].get("percent") is not None:
+            # 最满的那块盘。逐盘落库的话，节点换盘或改挂载点就会留下一堆
+            # 再也不更新的死指标
+            out.append((p("disk_max"), disks[0]["percent"]))
+        ctr = node.get("containers") or {}
+        if ctr.get("running") is not None:
+            out.append((p("containers_running"), ctr["running"]))
+        cs = node.get("crowdsec") or {}
+        if cs.get("ipset_entries") is not None:
+            out.append((p("guard_entries"), cs["ipset_entries"]))
+        if node.get("temp_c") is not None:
+            out.append((p("temp"), node["temp_c"]))
+        net = node.get("network") or {}
+        if net.get("rx_bytes_per_sec") is not None:
+            out.append((p("net_rx"), net["rx_bytes_per_sec"]))
+            out.append((p("net_tx"), net.get("tx_bytes_per_sec") or 0))
     return out

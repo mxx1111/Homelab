@@ -28,14 +28,34 @@ done
 cd "$(dirname "$0")"
 
 # 本机的目标主机与密码放这里，不进版本库。见 deploy.env.example
+#
+# 环境变量优先于文件。原来是直接 source，文件里留空的项会把已经 export 的值
+# 冲掉——脚本头部写着"密码可用环境变量 SUDO_PASS 提供"，但只要 .deploy.env
+# 里有一行 SUDO_PASS=，那句话就不成立，而且失败得很隐蔽：脚本转去交互读密码，
+# 在 CI 或非交互环境下直接读到 EOF 退出，一行输出都没有
+_env_host="${HOMELAB_HOST:-}"; _env_port="${HOMELAB_PORT:-}"
+_env_key="${HOMELAB_KEY:-}";   _env_pass="${SUDO_PASS:-}"
 [[ -f .deploy.env ]] && . .deploy.env
+[[ -n "$_env_host" ]] && HOMELAB_HOST="$_env_host"
+[[ -n "$_env_port" ]] && HOMELAB_PORT="$_env_port"
+[[ -n "$_env_key"  ]] && HOMELAB_KEY="$_env_key"
+[[ -n "$_env_pass" ]] && SUDO_PASS="$_env_pass"
 # 目标主机：~/.ssh/config 里的别名或 user@host
 HOST="${HOMELAB_HOST:?未设置 HOMELAB_HOST。cp deploy.env.example .deploy.env 后填写，或直接 export}"
+# 端口和密钥可选。原来只支持 ssh 别名，意味着不在 ~/.ssh/config 里配一条就没法
+# 部署——而别名是本机的个人配置，不该成为部署的前提条件
+SSH_ARGS=(); SCP_ARGS=()
+if [[ -n "${HOMELAB_PORT:-}" ]]; then
+  SSH_ARGS+=(-p "$HOMELAB_PORT"); SCP_ARGS+=(-P "$HOMELAB_PORT")   # scp 的端口是大写 -P
+fi
+if [[ -n "${HOMELAB_KEY:-}" ]]; then
+  SSH_ARGS+=(-i "$HOMELAB_KEY"); SCP_ARGS+=(-i "$HOMELAB_KEY")
+fi
 
 if [[ -z "${SUDO_PASS:-}" ]]; then
   read -rsp "sudo 密码: " SUDO_PASS; echo
 fi
-rsudo() { ssh "$HOST" "echo '$SUDO_PASS' | sudo -S bash -c '$1'" 2>&1 | grep -v '^\[sudo\]' || true; }
+rsudo() { ssh "${SSH_ARGS[@]}" "$HOST" "echo '$SUDO_PASS' | sudo -S bash -c '$1'" 2>&1 | grep -v '^\[sudo\]' || true; }
 
 echo "==> 打包"
 TMP=$(mktemp -d)
@@ -45,10 +65,10 @@ tar czf "$TMP/app.tgz" backend frontend run.py requirements.txt config.yaml \
     config.example.yaml Dockerfile docker-compose.yml "${EXTRA[@]}"
 
 echo "==> 上传"
-scp -q "$TMP/app.tgz" "$HOST:/tmp/homelab-app.tgz"
+scp -q "${SCP_ARGS[@]}" "$TMP/app.tgz" "$HOST:/tmp/homelab-app.tgz"
 # .env 装着密钥，不在 tar 包里（tar 会进不了 gitignore 的口径），单独送
 if [[ -f .env ]]; then
-  scp -q .env "$HOST:/tmp/homelab.env"
+  scp -q "${SCP_ARGS[@]}" .env "$HOST:/tmp/homelab.env"
   rsudo "mv /tmp/homelab.env $DEST/.env && chmod 600 $DEST/.env"
 fi
 rm -rf "$TMP"

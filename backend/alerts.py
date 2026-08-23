@@ -10,6 +10,7 @@
 """
 import logging
 import time
+from datetime import datetime, timedelta, time as dt_time
 
 from .asn_names import country_cn, pretty_as
 from .scenario_names import scenario_cn
@@ -56,6 +57,108 @@ def _fmt_left(seconds):
     if h:
         return f"{h} 小时 {m} 分" if m else f"{h} 小时"
     return f"{m} 分" if m else "不到 1 分钟"
+
+
+DEFAULT_DIGEST_TIMES = [(8, 0), (11, 30), (22, 0)]
+
+
+def _parse_digest_times(raw):
+    """["08:00", "11:30"] -> [(8,0), (11,30)]，按时间排序。
+
+    配错了不静默退化成"从不推送"——那种失败要等用户发现"怎么一直没收到通知"，
+    可能是几天以后。解析不出来就退回默认值并留一条 warning。
+    """
+    if not raw:
+        return list(DEFAULT_DIGEST_TIMES)
+    out = []
+    for item in raw:
+        try:
+            h, _, m = str(item).partition(":")
+            h, m = int(h), int(m or 0)
+            if not (0 <= h < 24 and 0 <= m < 60):
+                raise ValueError(item)
+            out.append((h, m))
+        except (TypeError, ValueError):
+            log.warning("notify.ban_digest.times 里的 %r 不是 HH:MM，已忽略", item)
+    if not out:
+        log.warning("notify.ban_digest.times 全部无效，退回默认 %s", DEFAULT_DIGEST_TIMES)
+        return list(DEFAULT_DIGEST_TIMES)
+    return sorted(set(out))
+
+
+def _next_digest_at(times, after_ts):
+    """after_ts 之后最近的一个推送时刻。用本地时区——容器挂了 /etc/localtime，
+    配置里写的 11:30 就是墙上时钟的 11:30，不是 UTC"""
+    if not times:
+        return None
+    base = datetime.fromtimestamp(after_ts)
+    for day_offset in (0, 1):
+        day = (base + timedelta(days=day_offset)).date()
+        for h, m in times:
+            cand = datetime.combine(day, dt_time(h, m)).timestamp()
+            if cand > after_ts:
+                return cand
+    return None
+
+
+def _digest_message(items, site_name, now):
+    """封禁汇总的标题和正文。
+
+    这条是在手机上瞄一眼的，所以先给结论（几个 IP、主要是什么攻击），
+    再给明细。逐条列出来当然最全，但一晚上几十条谁也不会往下翻——
+    真正有用的是"有没有异常的东西"，那要靠聚合才看得出来：
+    某个场景突然占了八成、某个国家冒出来一大片，才值得点进面板细看。
+    """
+    span_from = datetime.fromtimestamp(min(i["ts"] for i in items)).strftime("%H:%M")
+    span_to = datetime.fromtimestamp(now).strftime("%H:%M")
+    ips = {i["ip"] for i in items if i.get("ip")}
+
+    def tally(field, fmt=lambda x: x):
+        counter = {}
+        for i in items:
+            v = i.get(field)
+            if v:
+                counter[v] = counter.get(v, 0) + 1
+        return sorted(counter.items(), key=lambda kv: -kv[1])
+
+    title = f"[{site_name}·封禁汇总] {span_from}-{span_to} 拦下 {len(ips)} 个 IP"
+
+    lines = [f"**{span_from} 至 {span_to}**，共封禁 {len(ips)} 个 IP。", ""]
+
+    scenarios = tally("scenario")
+    if scenarios:
+        lines.append("**攻击类型**")
+        for sc, n in scenarios[:8]:
+            lines.append(f"- {scenario_cn(sc) or sc.split('/')[-1]} ×{n}")
+        lines.append("")
+
+    countries = tally("country")
+    if countries:
+        lines.append("**来源国家**　" +
+                     "　".join(f"{country_cn(c) or c} {n}" for c, n in countries[:6]))
+        lines.append("")
+
+    machines = tally("machine")
+    if len(machines) > 1:
+        lines.append("**检出机器**　" + "　".join(f"{m} {n}" for m, n in machines))
+        lines.append("")
+
+    lines.append("**明细**")
+    for i in items[:30]:
+        where = " ".join(filter(None, [
+            country_cn(i.get("country")) or "",
+            pretty_as(i.get("as_name")) if i.get("as_name") else "",
+        ]))
+        sc = scenario_cn(i.get("scenario")) or (i.get("scenario") or "").split("/")[-1]
+        when = datetime.fromtimestamp(i["ts"]).strftime("%H:%M")
+        lines.append(f"- `{i.get('ip')}`　{when}　{sc}" + (f"　{where}" if where else ""))
+    if len(items) > 30:
+        lines.append(f"\n> 另有 {len(items) - 30} 条未列出，完整记录在面板的事件时间线里")
+
+    lines.append("")
+    lines.append("> 决策已自动下发到全部节点，这条只是告知，通常不需要做什么。")
+    lines.append(f"> 生成于 {datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M:%S')}")
+    return title, "\n".join(lines)
 
 
 def _ban_message(ban, nodes):
@@ -110,7 +213,17 @@ class AlertEngine:
         self._known_bans = None       # 首轮只做基线，不为存量封禁刷屏
         self._overrides = {}          # 面板改的规则，覆盖 config 里的默认值
         self._muted = {}              # 告警 key -> 静音到期时间戳(0 表示永久)
+        # 封禁汇总。一条一推在手机上太吵——夜里被扫一轮能收几十条，
+        # 而单条封禁本身几乎不需要当场做什么（决策已经自动下发了）。
+        # 攒到固定时段发一条汇总，既知道发生了什么，又不会被打断。
+        # 其他告警（磁盘满、证书到期、服务掉线）保持即时：那些是要立刻动手的
+        dcfg = ((cfg or {}).get("notify") or {}).get("ban_digest") or {}
+        self.digest_enabled = bool(dcfg.get("enabled", True))
+        self.digest_times = _parse_digest_times(dcfg.get("times"))
+        self._pending_bans = []
+        self._digest_warned = False
         self.reload_settings()
+        self._restore_pending_bans()
 
     # ---------- 运行时配置 ----------
 
@@ -341,13 +454,23 @@ class AlertEngine:
             if self.is_muted(f"ban:{ban['ip']}"):
                 continue
             title, detail = _ban_message(ban, nodes)
-            self._fire(f"ban:{ban['ip']}", "warn", title, detail, kind="ban")
+            digest = self._digest_active()
+            self._fire(f"ban:{ban['ip']}", "warn", title, detail, kind="ban",
+                       defer=digest)
+            if digest:
+                self._queue_ban(ban, now)
+        if self._digest_active():
+            self._flush_ban_digest(now)
 
     def _fire(self, key, level, title, detail, kind="alert",
-              recovered=False, repeat=False):
+              recovered=False, repeat=False, defer=False):
         self.history.record_event(kind, level, key, title, detail)
         log.info("[%s] %s %s", level, title, detail or "")
 
+        # defer：事件照常落库（面板的事件时间线要看），只是不当场推送。
+        # 封禁走这条路，攒到时段汇总
+        if defer:
+            return
         if not self.notifier.should_send(level) and not recovered:
             return
         if recovered and not self.cfg.get("notify_recovery", True):
@@ -362,6 +485,107 @@ class AlertEngine:
         err = self.notifier.send(subject, body)
         if err and err != "推送未启用":
             log.warning("推送失败 [%s]: %s", title, err)
+
+    # ---------- 封禁汇总 ----------
+
+    MAX_PENDING = 500        # 上限。被大规模扫描时一晚上能攒出几千条，
+                             # 全塞进一条推送既发不出去也没人看
+
+    def _digest_active(self):
+        """汇总必须能落盘才有意义。
+
+        历史库不可用时退回即时推送：队列只在内存里，重启就丢；更糟的是
+        ban_digest_last 也存不住，_digest_due 每次都走"建基线"分支，
+        结果是**永远不触发推送**——封禁通知彻底消失，比刷屏严重得多，
+        而且不会报错，没人会发现。
+
+        不能在 __init__ 里判断：AlertEngine 在 main.py 里比 history.start()
+        先构造，那时 ready 还是 False。
+        """
+        if not self.digest_enabled:
+            return False
+        if not (self.history and self.history.ready):
+            if not self._digest_warned:
+                log.warning("历史库不可用，封禁汇总无法持久化，退回逐条即时推送")
+                self._digest_warned = True
+            return False
+        return True
+
+    def _restore_pending_bans(self):
+        """重启时把没发出去的捞回来。
+
+        存在 settings 里而不是只放内存：面板重启（部署、断电）在两个推送时段
+        之间是常事，丢了的话那段时间的封禁就永远不会出现在任何一条通知里，
+        而且没人会察觉——不像报错，静默丢失是查不出来的
+        """
+        st = self.history.get_settings() if self.history else {}
+        items = st.get("pending_bans")
+        if isinstance(items, list):
+            self._pending_bans = items[-self.MAX_PENDING:]
+            if self._pending_bans:
+                log.info("恢复了 %d 条待汇总的封禁", len(self._pending_bans))
+
+    def _save_pending_bans(self):
+        if not self.history:
+            return
+        try:
+            self.history.set_setting("pending_bans", self._pending_bans)
+        except Exception as exc:  # noqa: BLE001  持久化失败不能拖垮告警主流程
+            log.warning("待汇总封禁写盘失败: %s", exc)
+
+    def _queue_ban(self, ban, now):
+        """只留汇总要用的字段，别把整个 decision 塞进 settings"""
+        self._pending_bans.append({
+            "ts": int(now),
+            "ip": ban.get("ip"),
+            "machine": ban.get("machine"),
+            "scenario": ban.get("reason") or "",
+            "country": ban.get("country"),
+            "as_name": ban.get("as_name"),
+        })
+        if len(self._pending_bans) > self.MAX_PENDING:
+            self._pending_bans = self._pending_bans[-self.MAX_PENDING:]
+        self._save_pending_bans()
+
+    def _digest_due(self, now):
+        """到下一个推送时刻了吗。
+
+        没有 last 时（首次启用、或历史库刚建）不补发存量，只记基线——
+        否则第一次启用就会把队列里所有东西一次性推出去，正是要避免的那种刷屏
+        """
+        st = self.history.get_settings() if self.history else {}
+        last = st.get("ban_digest_last")
+        if not last:
+            self._set_digest_last(now)
+            return False
+        due = _next_digest_at(self.digest_times, float(last))
+        return due is not None and now >= due
+
+    def _set_digest_last(self, now):
+        if not self.history:
+            return
+        try:
+            self.history.set_setting("ban_digest_last", int(now))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("汇总时间戳写盘失败: %s", exc)
+
+    def _flush_ban_digest(self, now):
+        if not self._digest_due(now):
+            return
+        items, self._pending_bans = self._pending_bans, []
+        self._save_pending_bans()
+        self._set_digest_last(now)
+        if not items:
+            return                      # 这段时间没有封禁就不发，省得每天三条空通知
+        title, body = _digest_message(items, self.site_name, now)
+        err = self.notifier.send(title, body)
+        if err and err != "推送未启用":
+            log.warning("封禁汇总推送失败: %s", err)
+            # 发失败就放回去，下个时段连同新的一起再试。丢了就再也补不回来了
+            self._pending_bans = items + self._pending_bans
+            self._save_pending_bans()
+        else:
+            log.info("已推送封禁汇总，共 %d 条", len(items))
 
     # ---------- 给面板看的 ----------
 
