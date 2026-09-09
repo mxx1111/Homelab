@@ -61,7 +61,8 @@ def _kv(lines):
 def _parse_host(lines):
     """/proc/loadavg、/proc/uptime、/proc/meminfo 混在一节里，按内容认"""
     info = {"load": None, "uptime_seconds": None, "memory": None,
-            "cores": None, "os": None}
+            "cores": None, "os": None, "cpu_percent": None,
+            "procs_running": None}
     mem = {}
     for line in lines:
         s = line.strip()
@@ -71,12 +72,25 @@ def _parse_host(lines):
             k, _, v = s.partition(":")
             if v.strip():
                 mem[k.strip()] = int(v.split()[0]) * 1024
+        elif s.startswith("cpupercent="):
+            # v7 起脚本自己采两次 /proc/stat 求差。老脚本没有这行，留 None，
+            # 面板照旧退回 load_percent
+            try:
+                info["cpu_percent"] = float(s.split("=", 1)[1])
+            except ValueError:
+                pass
         elif s.startswith("cpucores="):
             info["cores"] = int(s.split("=", 1)[1] or 1)
         elif s.startswith("os="):
             info["os"] = s.split("=", 1)[1]
         elif re.match(r"^[\d.]+ [\d.]+ [\d.]+ \d+/\d+", s):
             info["load"] = [float(x) for x in s.split()[:3]]
+            # loadavg 第 4 段是 "可运行/总进程数"。留着它，排查
+            # "load 很高但 CPU 空闲" 时一眼能看出是不是 D 状态堆积
+            try:
+                info["procs_running"] = int(s.split()[3].split("/")[0])
+            except (IndexError, ValueError):
+                pass
         elif re.match(r"^[\d.]+ [\d.]+$", s):
             info["uptime_seconds"] = int(float(s.split()[0]))
 

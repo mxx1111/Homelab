@@ -195,7 +195,9 @@ def from_remote(node):
     ns.put(snap, "host", {
         "cores": node.get("cores"), "load": node.get("load"),
         "load_percent": node.get("load_percent"),
-        "cpu_percent": None,          # 节点脚本读 loadavg，没算 CPU 瞬时占用
+        # v7 起脚本采两次 /proc/stat 求差，给的是真实使用率；老脚本没这项时是 None
+        "cpu_percent": node.get("cpu_percent"),
+        "procs_running": node.get("procs_running"),
         "memory": node.get("memory"), "swap": node.get("swap"),
         "temp_c": node.get("temp_c"),
         "uptime_seconds": node.get("uptime_seconds"),
@@ -325,7 +327,14 @@ def summarize(snap):
 
     # 灯色取三个百分比里最高的。分开看容易漏——内存 90% 和磁盘 90% 都是问题，
     # 只盯负载的话两个都看不见
-    peak = max(host.get("load_percent") or 0,
+    # CPU 压力优先看真实使用率，拿不到才退回 loadavg 换算。
+    # loadavg 把不可中断睡眠（D 状态）的进程也算进去，带 NPU/GPU 的板子上
+    # 常驻驱动线程就卡在 D 状态：aipro 实测 load 17（3 核 = 567%）而 CPU
+    # 99% 空闲、iowait 0%，只看 loadavg 会一直误报"节点异常"。
+    cpu_pressure = host.get("cpu_percent")
+    if cpu_pressure is None:
+        cpu_pressure = host.get("load_percent") or 0
+    peak = max(cpu_pressure,
                (host.get("memory") or {}).get("percent") or 0,
                worst_disk.get("percent") or 0)
 
@@ -359,6 +368,10 @@ def summarize(snap):
         "uptime_seconds": node["uptime_seconds"],
         "clock_skew_seconds": node["clock_skew_seconds"],
         "load_percent": host.get("load_percent"),
+        # 真实 CPU 使用率优先展示；loadavg 原值留着放进 tooltip，
+        # 排查"负载高但 CPU 空闲"时还得看它
+        "cpu_percent": host.get("cpu_percent"),
+        "load": host.get("load"),
         "cores": host.get("cores"),
         "memory_percent": (host.get("memory") or {}).get("percent"),
         "disk_percent": worst_disk.get("percent"),

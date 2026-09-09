@@ -913,7 +913,9 @@ function renderFleetStrip() {
       <span class="fname"><span class="dot ${n.level}"></span>${esc(n.name)}
         ${n.role === "local" ? '<span class="tag">本机</span>' : ""}
         ${n.issues.length ? `<span class="tag crit">${esc(n.issues[0])}</span>` : ""}</span>
-      ${fleetCell(n.load_percent, `${n.cores ?? "?"} 核`)}
+      ${fleetCell(n.cpu_percent ?? n.load_percent, `${n.cores ?? "?"} 核${
+        n.load ? " · 负载 " + n.load.map(x=>x.toFixed(2)).join(" / ") : ""}${
+        n.cpu_percent == null ? "（无 CPU 采样，显示的是负载换算）" : ""}`)}
       ${fleetCell(n.memory_percent, "内存")}
       ${fleetCell(n.disk_percent, n.disk_mount || "最满的盘")}
       <span class="fmeta">${n.containers_running ?? "—"}/${n.containers_total ?? "—"} 容器</span>
@@ -928,7 +930,7 @@ function renderFleetStrip() {
   return card(`全部机器 <span class="right">${fleetItems.length} 台 · ${summary}</span>`,
     offline || bad ? "crit" : "ok", `
     <div class="fhead">
-      <span class="fname">机器</span><span class="fcell">负载</span>
+      <span class="fname">机器</span><span class="fcell">CPU</span>
       <span class="fcell">内存</span><span class="fcell">最满的盘</span>
       <span class="fmeta">容器</span><span class="fmeta">端口</span>
       <span class="fmeta">落地封禁</span><span class="fmeta">延迟</span>

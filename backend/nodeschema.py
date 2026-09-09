@@ -43,7 +43,7 @@
 # 面板期望的节点采集脚本版本（scripts/node-collect.sh 的 script_version）。
 # 节点脚本比这个旧时，新增的模块会缺，但那不是"这台没有这个模块"，
 # 是"这台的脚本该更新了"——两件事的处理方式完全不同，得分开说
-EXPECTED_SCRIPT_VERSION = 5
+EXPECTED_SCRIPT_VERSION = 7
 
 # 能力档位
 FULL = "full"

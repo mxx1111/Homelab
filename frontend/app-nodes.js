@@ -90,8 +90,11 @@ function renderHost(sec, series) {
   const d = sec?.data;
   if (!d?.ok) return fail(sec, siteName);
   const m = d.memory || {}, load1 = d.load?.[0];
+  // CPU 压力优先看真实使用率。loadavg 把 D 状态进程也算进去，带 NPU/GPU
+  // 的板子上常驻驱动线程会把它顶到很高（aipro：load 17／3 核，CPU 却 99% 空闲）
   const loadPct = load1 != null && d.cpu_cores ? load1 / d.cpu_cores * 100 : null;
-  const dot = (m.percent >= 90 || (loadPct != null && loadPct >= 100)) ? "warn" : "ok";
+  const cpuPct = d.cpu_percent ?? loadPct;
+  const dot = (m.percent >= 90 || (cpuPct != null && cpuPct >= 100)) ? "warn" : "ok";
   return card(siteName, dot, `
     <div class="big">${d.cpu_percent ?? "—"}<span class="unit">% CPU</span></div>
     ${sparkline(series?.cpu, {min: 0, emptyText: "CPU 历史采集中"})}
@@ -327,7 +330,7 @@ function moduleMissing(snap, name) {
 
 function nvHost(m, snap) {
   const mem = m.memory || {};
-  const peak = Math.max(m.load_percent || 0, mem.percent || 0);
+  const peak = Math.max(m.cpu_percent ?? m.load_percent ?? 0, mem.percent || 0);
   // 本机有历史曲线，节点没有（节点的历史存在它自己那台上）。同一张卡，
   // 有就多画一条 sparkline，没有就不画——不为此分出第二个渲染器
   const spark = snap.node.role === "local"

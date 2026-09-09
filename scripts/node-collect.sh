@@ -16,18 +16,46 @@
 # 输出格式：###节名 一行，后面跟该节的原始内容，直到下一个 ### 或 ###END。
 set -u
 export LC_ALL=C
-# 强制命令模式下客户端传来的命令在 SSH_ORIGINAL_COMMAND 里，一律忽略——
-# 认它就等于把强制命令这层防护自己拆了
+# 仅接受固定的只读核查协议，绝不 eval 客户端命令或转交 shell。
+original_command=${SSH_ORIGINAL_COMMAND:-}
 unset SSH_ORIGINAL_COMMAND
 
 # 每条采集都套超时。任何一条卡住（NFS 挂了的 df、docker daemon 无响应）
 # 都会让整轮采集超时，面板那边表现成"节点离线"，实际只是某一项卡住
 run() { timeout "${1}" "${@:2}" 2>/dev/null; }
 
+if [[ "$original_command" == verify-ip* ]]; then
+  if [[ ! "$original_command" =~ ^verify-ip\ ([0-9a-fA-F:./]+)$ ]]; then
+    echo "supported=false"; echo "error=invalid-target"; exit 2
+  fi
+  verify_target=${BASH_REMATCH[1]}
+  echo "checked_at=$(date +%s)"
+  if ! verify_sets=$(run 4 ipset list -name); then
+    echo "supported=false"; echo "error=ipset-unavailable"; exit 0
+  fi
+  verify_found=false; verify_matched=false; verify_referenced=false
+  for verify_set in $verify_sets; do
+    [[ "$verify_set" =~ ^crowdsec[a-zA-Z0-9_-]*$ ]] || continue
+    verify_found=true
+    if run 4 ipset test "$verify_set" "$verify_target" >/dev/null; then
+      verify_matched=true
+      echo "matched_set=$verify_set"
+      verify_refs=$(run 4 ipset list "$verify_set" -terse | awk '/^References:/{print $2}')
+      if [[ "${verify_refs:-0}" =~ ^[0-9]+$ ]] && (( verify_refs > 0 )); then
+        verify_referenced=true
+      fi
+    fi
+  done
+  echo "supported=$verify_found"
+  echo "matched=$verify_matched"
+  echo "referenced=$verify_referenced"
+  exit 0
+fi
+
 echo "###META"
 echo "hostname=$(hostname)"
 echo "collected_at=$(date +%s)"
-echo "script_version=5"
+echo "script_version=7"
 
 echo "###HOST"
 run 2 cat /proc/loadavg
@@ -35,6 +63,22 @@ run 2 cat /proc/uptime
 run 2 grep -E "^(MemTotal|MemAvailable|SwapTotal|SwapFree):" /proc/meminfo
 # CPU 核数用于把 loadavg 换算成百分比——负载 4 在 2 核和 16 核上完全是两回事
 echo "cpucores=$(nproc 2>/dev/null || echo 1)"
+# CPU 瞬时占用。不能只拿 loadavg 当"CPU 压力"：Linux 把不可中断睡眠（D 状态）
+# 的进程也计进 loadavg，带 NPU/GPU 的板子上一堆常驻驱动线程就卡在 D 状态。
+# 香橙派 AiPro 实测 load 稳定在 17（3 核，换算 567%），而 CPU 实际 99% 空闲、
+# iowait 0%——17 个 D 状态线程全是昇腾驱动在定时等待，一点 CPU 都不吃。
+# 采两次 /proc/stat 求差才是真实使用率。
+_cpu_snap() { awk '/^cpu /{idle=$5+$6; tot=0; for(i=2;i<=NF;i++) tot+=$i;
+  # 必须 %.0f 强制整数。jiffies 累计值动辄 1e10，awk 默认 OFMT 是 %.6g，
+  # 直接 print 会输出 3.06349e+10——两次采样精度丢到完全相同，差值恒为 0，
+  # 结果就是开机久的机器永远采不到 CPU 使用率（szch/chen 实测踩中）
+  printf "%.0f %.0f\n", idle, tot; exit}' /proc/stat 2>/dev/null; }
+_c1=$(_cpu_snap); sleep 0.3 2>/dev/null || sleep 1; _c2=$(_cpu_snap)
+if [ -n "$_c1" ] && [ -n "$_c2" ]; then
+  awk -v a="$_c1" -v b="$_c2" 'BEGIN{split(a,x," ");split(b,y," ");
+    di=y[1]-x[1]; dt=y[2]-x[2];
+    if (dt>0) printf "cpupercent=%.1f\n", (1-di/dt)*100 }'
+fi
 [ -r /etc/os-release ] && . /etc/os-release && echo "os=${PRETTY_NAME:-unknown}"
 
 echo "###TEMP"
