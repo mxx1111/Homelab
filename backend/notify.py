@@ -18,6 +18,7 @@ import httpx
 log = logging.getLogger("homelab.notify")
 
 TURBO_URL = "https://sctapi.ftqq.com/{key}.send"
+CONTENT_URL = "https://sctapi.ftqq.com/push?id={pushid}&readkey={readkey}"
 V3_URL = "https://{uid}.push.ft07.com/send/{key}.send"
 
 
@@ -41,6 +42,7 @@ def _encode_rfc2047(text: str) -> str:
 class Notifier:
     def __init__(self, cfg):
         ncfg = (cfg or {}).get("notify") or {}
+        self._receipt = None
         self.provider = str(ncfg.get("provider") or "serverchan").strip().lower()
 
         # Server 酱配置
@@ -105,6 +107,15 @@ class Notifier:
         code = body.get("code")
         if code not in (0, None):
             return f"Server 酱返回 code={code} {str(body.get('message'))[:100]}"
+        # 留住回执标识。Server 酱把正文单独存在它自己的页面上，微信里那条只是标题+摘要；
+        # 正文打不开时（过期、Key 重置）如果手上没有 pushid/readkey，就完全无从复核。
+        data = body.get("data")
+        if isinstance(data, dict) and data.get("pushid"):
+            self._receipt = {"pushid": str(data.get("pushid")),
+                             "readkey": str(data.get("readkey") or "")}
+            log.info("Server 酱已受理 pushid=%s", self._receipt["pushid"])
+            if self._receipt["readkey"]:
+                log.info("正文页 %s", CONTENT_URL.format(**self._receipt))
         return None
 
     def _send_ntfy(self, title: str, desp: str) -> Optional[str]:

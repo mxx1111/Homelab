@@ -222,6 +222,7 @@ class AlertEngine:
         self.digest_times = _parse_digest_times(dcfg.get("times"))
         self._pending_bans = []
         self._digest_warned = False
+        self._digest_source_warned = False
         self.reload_settings()
         self._restore_pending_bans()
 
@@ -460,6 +461,7 @@ class AlertEngine:
             if digest:
                 self._queue_ban(ban, now)
         if self._digest_active():
+            self.digest_blocked_reason()   # 让规则关着这件事在日志里留下痕迹
             self._flush_ban_digest(now)
 
     def _fire(self, key, level, title, detail, kind="alert",
@@ -510,6 +512,22 @@ class AlertEngine:
                 self._digest_warned = True
             return False
         return True
+
+    def digest_blocked_reason(self):
+        """汇总开着、却永远发不出东西的那种状态。
+
+        "按时段汇总"和"要不要收集新增封禁"是两个独立开关，前者只决定什么时候发。
+        面板上把 new_ban 关掉之后 _new_bans 第一行就返回空，队列永远没有素材，
+        到点 _flush_ban_digest 走"这段时间没有封禁"分支静默跳过——
+        用户看到的是"定时通知怎么没有了"，而日志里一行异常都没有。
+        逐条推送时关掉它是合理的（就是嫌吵才关的），改成汇总之后这个组合就自相矛盾了。
+        """
+        if not (self.digest_enabled and not self._on("new_ban")):
+            return None
+        if not self._digest_source_warned:
+            log.warning('封禁汇总已启用，但"新增封禁"规则是关的，汇总将永远没有内容')
+            self._digest_source_warned = True
+        return '封禁汇总已开启，但"新增封禁"告警规则是关的，汇总收不到任何内容'
 
     def _restore_pending_bans(self):
         """重启时把没发出去的捞回来。
