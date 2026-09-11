@@ -62,8 +62,9 @@ export function loadApp(extraExports = "") {
 }
 
 export function runner() {
-  let fails = 0;
+  let fails = 0, ran = 0;
   const t = (name, fn) => {
+    ran++;
     try {
       const r = fn();
       console.log(`  ${r === true ? "ok  " : "??  "} ${name}${r === true ? "" : "  -> " + r}`);
@@ -73,5 +74,23 @@ export function runner() {
       fails++;
     }
   };
-  return {t, done: () => { console.log(fails ? `\n${fails} 项未通过` : "\n全部通过"); return fails; }};
+  /* 断言之外的失败（依赖起不来、脚手架自身抛异常）也得计数。
+     光打印一句"出错了"然后照常退出 0，会让一个什么都没测的测试看起来像通过 */
+  const fail = (name, why) => { console.log(`  FAIL ${name}  -> ${why}`); fails++; };
+  /* 跳过用退出码 2，与 0（通过）、1（失败）分开。
+     依赖没就绪不是失败，但更不是通过 */
+  const skip = (why, hint) => {
+    console.log(`\n跳过：${why}`);
+    if (hint) console.log(`  ${hint}`);
+    process.exit(2);
+  };
+  const done = () => {
+    if (!ran && !fails) {
+      console.log("\n一个断言都没执行——这不算通过。要么是提前 return 了，要么依赖没就绪。");
+      return 1;
+    }
+    console.log(fails ? `\n${fails} 项未通过` : `\n全部通过（${ran} 项）`);
+    return fails;
+  };
+  return {t, fail, skip, done};
 }

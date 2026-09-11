@@ -11,7 +11,7 @@ const base = (process.argv[2] || "http://127.0.0.1:8770").replace(/\/$/, "");
 const api = loadApp("renderSnapshotOverview, moduleCard, renderFleetStrip, " +
                     "renderOfflineNode, alertAnchor, setFleet:(v)=>{fleetItems=v}, " +
                     "setActive:(v)=>{activeNode=v}");
-const {t, done} = runner();
+const {t, skip, done} = runner();
 
 const get = async path => {
   const r = await fetch(base + path);
@@ -23,6 +23,16 @@ const levels = html =>
   [...html.matchAll(/data-module="(\w+)" class="card[^"]*">\s*<h2><span class="dot (\w*)"/g)]
     .map(m => [m[1], m[2]]);
 const weight = l => l === "crit" ? 0 : l === "warn" ? 1 : 2;
+
+/* 面板没起就干净地跳过（退出码 2），不要抛未捕获异常崩一屏堆栈——
+   那看起来像"测试挂了"，实际只是依赖没就绪 */
+try {
+  const h = await fetch(base + "/api/health");
+  if (!h.ok) throw new Error("HTTP " + h.status);
+} catch (e) {
+  skip(`连不上面板 ${base}（${e.message}）`,
+       "先起一个：HOMELAB_CONFIG=config.demo.yaml python run.py");
+}
 
 const fleet = await get("/api/nodes");
 const snaps = {};
